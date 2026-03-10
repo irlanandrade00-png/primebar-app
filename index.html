@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prime Bar — Integração YUZER</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --black: #0a0a0a;
+    --dark: #111111;
+    --card: #1a1a1a;
+    --border: #2a2a2a;
+    --gold: #c9a84c;
+    --gold-light: #e8c97a;
+    --white: #f0ece4;
+    --muted: #666;
+    --success: #4caf6e;
+    --error: #e05252;
+    --radius: 12px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--black);
+    color: var(--white);
+    font-family: 'DM Sans', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Background texture */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(201,168,76,0.08) 0%, transparent 60%),
+      radial-gradient(ellipse 40% 30% at 90% 90%, rgba(201,168,76,0.04) 0%, transparent 50%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0 24px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Header */
+  header {
+    padding: 48px 0 32px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 48px;
+  }
+
+  .header-inner {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+  }
+
+  .logo-block h1 {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 52px;
+    letter-spacing: 3px;
+    line-height: 1;
+    color: var(--white);
+  }
+
+  .logo-block h1 span {
+    color: var(--gold);
+  }
+
+  .logo-block p {
+    font-size: 13px;
+    color: var(--muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-top: 6px;
+  }
+
+  .status-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(76, 175, 110, 0.1);
+    border: 1px solid rgba(76, 175, 110, 0.3);
+    border-radius: 100px;
+    padding: 8px 16px;
+    font-size: 12px;
+    color: var(--success);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .status-dot {
+    width: 6px;
+    height: 6px;
+    background: var(--success);
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.8); }
+  }
+
+  /* Steps */
+  .steps {
+    display: grid;
+    gap: 24px;
+    margin-bottom: 48px;
+  }
+
+  .step {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 32px;
+    transition: border-color 0.3s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .step::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--gold), transparent);
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+
+  .step.active::before { opacity: 1; }
+  .step.active { border-color: rgba(201,168,76,0.3); }
+  .step.completed { border-color: rgba(76,175,110,0.3); }
+  .step.completed::before {
+    background: linear-gradient(90deg, var(--success), transparent);
+    opacity: 1;
+  }
+
+  .step-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  .step-num {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 18px;
+    color: var(--muted);
+    flex-shrink: 0;
+    transition: all 0.3s;
+  }
+
+  .step.active .step-num {
+    background: var(--gold);
+    color: var(--black);
+  }
+
+  .step.completed .step-num {
+    background: var(--success);
+    color: var(--black);
+  }
+
+  .step-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--white);
+    letter-spacing: 0.5px;
+  }
+
+  .step-subtitle {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  /* Input field */
+  .field {
+    margin-bottom: 16px;
+  }
+
+  .field label {
+    display: block;
+    font-size: 12px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+
+  .field input {
+    width: 100%;
+    background: var(--black);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    color: var(--white);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .field input:focus { border-color: var(--gold); }
+  .field input::placeholder { color: var(--muted); }
+
+  /* File uploads grid */
+  .uploads-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 16px;
+  }
+
+  .upload-card {
+    background: var(--black);
+    border: 1.5px dashed var(--border);
+    border-radius: 10px;
+    padding: 24px 20px;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: center;
+    position: relative;
+  }
+
+  .upload-card:hover { border-color: var(--gold); }
+  .upload-card.has-file {
+    border-style: solid;
+    border-color: var(--success);
+    background: rgba(76,175,110,0.05);
+  }
+
+  .upload-card input[type="file"] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+    width: 100%;
+    height: 100%;
+  }
+
+  .upload-icon {
+    font-size: 28px;
+    margin-bottom: 10px;
+    display: block;
+    transition: transform 0.2s;
+  }
+
+  .upload-card:hover .upload-icon { transform: translateY(-3px); }
+  .upload-card.has-file .upload-icon { filter: grayscale(1); }
+
+  .upload-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--white);
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  .upload-desc {
+    font-size: 11px;
+    color: var(--muted);
+    display: block;
+  }
+
+  .upload-filename {
+    font-size: 11px;
+    color: var(--success);
+    margin-top: 8px;
+    display: block;
+    font-weight: 500;
+    word-break: break-all;
+  }
+
+  .optional-badge {
+    font-size: 10px;
+    background: rgba(201,168,76,0.15);
+    color: var(--gold);
+    border-radius: 4px;
+    padding: 2px 7px;
+    display: inline-block;
+    margin-top: 6px;
+    letter-spacing: 0.5px;
+  }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 28px;
+    border-radius: 8px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s;
+    letter-spacing: 0.5px;
+  }
+
+  .btn-primary {
+    background: var(--gold);
+    color: var(--black);
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background: var(--gold-light);
+    transform: translateY(-1px);
+    box-shadow: 0 8px 24px rgba(201,168,76,0.25);
+  }
+
+  .btn-secondary {
+    background: transparent;
+    color: var(--white);
+    border: 1px solid var(--border);
+  }
+
+  .btn-secondary:hover:not(:disabled) {
+    border-color: var(--gold);
+    color: var(--gold);
+  }
+
+  .btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .btn-group {
+    display: flex;
+    gap: 12px;
+    margin-top: 24px;
+    flex-wrap: wrap;
+  }
+
+  /* Preview */
+  #preview-section {
+    display: none;
+  }
+
+  .preview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  .metric-card {
+    background: var(--black);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+  }
+
+  .metric-label {
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 8px;
+  }
+
+  .metric-value {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 28px;
+    color: var(--gold);
+    letter-spacing: 1px;
+    display: block;
+  }
+
+  .metric-value.success { color: var(--success); }
+
+  /* Table */
+  .preview-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  .preview-table th {
+    text-align: left;
+    padding: 10px 14px;
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .preview-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    color: var(--white);
+  }
+
+  .preview-table tr:last-child td { border-bottom: none; }
+  .preview-table tr:hover td { background: rgba(255,255,255,0.02); }
+
+  .table-scroll {
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+
+  .table-scroll::-webkit-scrollbar { width: 4px; }
+  .table-scroll::-webkit-scrollbar-track { background: transparent; }
+  .table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  /* Tabs */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 20px;
+    background: var(--black);
+    border-radius: 8px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    width: fit-content;
+  }
+
+  .tab-btn {
+    padding: 8px 18px;
+    border-radius: 6px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    transition: all 0.2s;
+  }
+
+  .tab-btn.active {
+    background: var(--card);
+    color: var(--white);
+  }
+
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 32px;
+    right: 32px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    max-width: 360px;
+    z-index: 1000;
+    transform: translateY(100px);
+    opacity: 0;
+    transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .toast.show {
+    transform: translateY(0);
+    opacity: 1;
+  }
+
+  .toast.success { border-color: rgba(76,175,110,0.4); }
+  .toast.error { border-color: rgba(224,82,82,0.4); }
+
+  .toast-icon { font-size: 20px; flex-shrink: 0; margin-top: 2px; }
+  .toast-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .toast-body { font-size: 12px; color: var(--muted); }
+
+  /* Loading spinner */
+  .spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(0,0,0,0.3);
+    border-top-color: var(--black);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: none;
+  }
+
+  .btn.loading .spinner { display: block; }
+  .btn.loading .btn-text { display: none; }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* Progress bar */
+  .progress-bar {
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    margin-bottom: 32px;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--gold), var(--gold-light));
+    border-radius: 2px;
+    transition: width 0.4s ease;
+    width: 33%;
+  }
+
+  /* Guide box */
+  .guide-box {
+    background: rgba(201,168,76,0.06);
+    border: 1px solid rgba(201,168,76,0.2);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin-top: 24px;
+  }
+
+  .guide-box h4 {
+    font-size: 13px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 12px;
+  }
+
+  .guide-box ol {
+    padding-left: 20px;
+  }
+
+  .guide-box li {
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 6px;
+    line-height: 1.6;
+  }
+
+  .guide-box li strong { color: var(--white); }
+
+  /* Success section */
+  #success-section {
+    display: none;
+    text-align: center;
+    padding: 48px 24px;
+  }
+
+  .success-icon {
+    font-size: 64px;
+    display: block;
+    margin-bottom: 20px;
+    animation: pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  @keyframes pop {
+    from { transform: scale(0); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+  }
+
+  #success-section h2 {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 36px;
+    letter-spacing: 2px;
+    color: var(--success);
+    margin-bottom: 12px;
+  }
+
+  #success-section p {
+    font-size: 15px;
+    color: var(--muted);
+    margin-bottom: 32px;
+  }
+
+  .details-list {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    text-align: left;
+    max-width: 480px;
+    margin: 0 auto 32px;
+  }
+
+  .details-list h4 {
+    font-size: 12px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+
+  .details-list li {
+    font-size: 13px;
+    color: var(--white);
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .details-list li:last-child { border-bottom: none; }
+
+  /* Footer */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 24px 0;
+    margin-top: 64px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 1px;
+  }
+
+  footer span { color: var(--gold); }
+
+  @media (max-width: 600px) {
+    .header-inner { flex-direction: column; align-items: flex-start; }
+    .logo-block h1 { font-size: 38px; }
+    .uploads-grid { grid-template-columns: 1fr; }
+    .preview-grid { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <div class="header-inner">
+      <div class="logo-block">
+        <h1>PRIME <span>BAR</span></h1>
+        <p>Integração YUZER → Google Sheets</p>
+      </div>
+      <div class="status-badge">
+        <div class="status-dot"></div>
+        Sistema Online
+      </div>
+    </div>
+  </header>
+
+  <div class="progress-bar">
+    <div class="progress-fill" id="progress"></div>
+  </div>
+
+  <div class="steps" id="main-flow">
+
+    <!-- STEP 1: Planilha -->
+    <div class="step active" id="step1">
+      <div class="step-header">
+        <div class="step-num">1</div>
+        <div>
+          <div class="step-title">Planilha do Evento</div>
+          <div class="step-subtitle">Informe o link ou ID da planilha no Google Sheets</div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Link ou ID da Planilha</label>
+        <input type="text" id="spreadsheet-id" placeholder="https://docs.google.com/spreadsheets/d/..." />
+      </div>
+
+      <div class="guide-box">
+        <h4>Como encontrar o link</h4>
+        <ol>
+          <li>Abra a planilha do evento no Google Sheets</li>
+          <li>Copie o link completo da barra de endereço do navegador</li>
+          <li>Cole no campo acima — o sistema extrai o ID automaticamente</li>
+        </ol>
+      </div>
+
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="goToStep2()">
+          <span class="btn-text">Próximo →</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- STEP 2: Upload YUZER -->
+    <div class="step" id="step2" style="opacity:0.5;pointer-events:none;">
+      <div class="step-header">
+        <div class="step-num">2</div>
+        <div>
+          <div class="step-title">Relatórios do YUZER</div>
+          <div class="step-subtitle">Faça upload dos arquivos exportados da plataforma</div>
+        </div>
+      </div>
+
+      <div class="uploads-grid">
+        <label class="upload-card" id="card-produtos">
+          <input type="file" id="file-produtos" accept=".xlsx" onchange="onFileSelect(this, 'card-produtos', 'name-produtos')">
+          <span class="upload-icon">📦</span>
+          <span class="upload-label">Produtos Vendidos</span>
+          <span class="upload-desc">produtos_vendidos_*.xlsx</span>
+          <span class="upload-filename" id="name-produtos"></span>
+        </label>
+
+        <label class="upload-card" id="card-caixas">
+          <input type="file" id="file-caixas" accept=".xlsx" onchange="onFileSelect(this, 'card-caixas', 'name-caixas')">
+          <span class="upload-icon">💳</span>
+          <span class="upload-label">Exportação Caixas</span>
+          <span class="upload-desc">exportacao_caixas_*.xlsx</span>
+          <span class="upload-filename" id="name-caixas"></span>
+        </label>
+
+        <label class="upload-card" id="card-painel">
+          <input type="file" id="file-painel" accept=".xlsx" onchange="onFileSelect(this, 'card-painel', 'name-painel')">
+          <span class="upload-icon">📊</span>
+          <span class="upload-label">Painel de Vendas</span>
+          <span class="upload-desc">exportacao_painel_*.xlsx</span>
+          <span class="upload-filename" id="name-painel"></span>
+        </label>
+
+        <label class="upload-card" id="card-tags">
+          <input type="file" id="file-tags" accept=".xlsx" onchange="onFileSelect(this, 'card-tags', 'name-tags')">
+          <span class="upload-icon">🏷️</span>
+          <span class="upload-label">Tags do Painel</span>
+          <span class="upload-desc">exportacao_tags_*.xlsx</span>
+          <span class="upload-filename" id="name-tags"></span>
+          <span class="optional-badge">Opcional</span>
+        </label>
+      </div>
+
+      <div class="btn-group">
+        <button class="btn btn-secondary" onclick="goToStep1()">← Voltar</button>
+        <button class="btn btn-primary" id="btn-preview" onclick="fazerPreview()">
+          <span class="btn-text">👁 Visualizar Dados</span>
+          <div class="spinner"></div>
+        </button>
+      </div>
+    </div>
+
+    <!-- STEP 3: Preview -->
+    <div class="step" id="step3" style="display:none;">
+      <div class="step-header">
+        <div class="step-num">3</div>
+        <div>
+          <div class="step-title">Confirmar e Enviar</div>
+          <div class="step-subtitle">Verifique os dados antes de enviar para o Google Sheets</div>
+        </div>
+      </div>
+
+      <div id="preview-section">
+        <div class="preview-grid" id="metrics-grid"></div>
+
+        <div class="tabs">
+          <button class="tab-btn active" onclick="showTab('tab-produtos')">📦 Produtos</button>
+          <button class="tab-btn" onclick="showTab('tab-caixas')">💳 Caixas</button>
+          <button class="tab-btn" onclick="showTab('tab-pagamentos')">💰 Pagamentos</button>
+        </div>
+
+        <div class="tab-content active" id="tab-produtos">
+          <div class="table-scroll">
+            <table class="preview-table">
+              <thead>
+                <tr>
+                  <th>Produto</th>
+                  <th>Categoria</th>
+                  <th>Qtd Vendida</th>
+                  <th>Preço Unit.</th>
+                  <th>Total</th>
+                </tr>
+              </thead>
+              <tbody id="tbody-produtos"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="tab-content" id="tab-caixas">
+          <div class="table-scroll">
+            <table class="preview-table">
+              <thead>
+                <tr>
+                  <th>Operador</th>
+                  <th>Operação</th>
+                  <th>Serial</th>
+                  <th>Total</th>
+                  <th>Dinheiro</th>
+                  <th>PIX</th>
+                  <th>Débito</th>
+                  <th>Crédito</th>
+                </tr>
+              </thead>
+              <tbody id="tbody-caixas"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="tab-content" id="tab-pagamentos">
+          <div id="pagamentos-content"></div>
+        </div>
+      </div>
+
+      <div class="btn-group">
+        <button class="btn btn-secondary" onclick="goToStep2FromPreview()">← Voltar</button>
+        <button class="btn btn-primary" id="btn-enviar" onclick="enviarParaSheets()">
+          <span class="btn-text">🚀 Enviar para Google Sheets</span>
+          <div class="spinner"></div>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SUCCESS -->
+  <div id="success-section">
+    <span class="success-icon">✅</span>
+    <h2>ENVIADO COM SUCESSO!</h2>
+    <p>Os dados foram preenchidos na planilha do evento no Google Sheets.</p>
+    <div class="details-list">
+      <h4>O que foi preenchido</h4>
+      <ul id="detalhes-list"></ul>
+    </div>
+    <button class="btn btn-primary" onclick="resetApp()">
+      ＋ Novo Evento
+    </button>
+  </div>
+
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast">
+  <span class="toast-icon" id="toast-icon"></span>
+  <div>
+    <div class="toast-title" id="toast-title"></div>
+    <div class="toast-body" id="toast-body"></div>
+  </div>
+</div>
+
+<footer>
+  <p><span>PRIME BAR</span> — Sistema de Integração YUZER v1.0</p>
+</footer>
+
+<script>
+  const API = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? 'http://localhost:5000'
+    : '';
+
+  let previewData = null;
+  let currentStep = 1;
+
+  function setProgress(pct) {
+    document.getElementById('progress').style.width = pct + '%';
+  }
+
+  function goToStep1() {
+    document.getElementById('step1').classList.add('active');
+    document.getElementById('step2').style.opacity = '0.5';
+    document.getElementById('step2').style.pointerEvents = 'none';
+    document.getElementById('step3').style.display = 'none';
+    currentStep = 1;
+    setProgress(33);
+  }
+
+  function goToStep2() {
+    const id = document.getElementById('spreadsheet-id').value.trim();
+    if (!id) { showToast('error', 'Campo obrigatório', 'Informe o link ou ID da planilha.'); return; }
+    document.getElementById('step1').classList.remove('active');
+    document.getElementById('step1').classList.add('completed');
+    document.getElementById('step1').querySelector('.step-num').textContent = '✓';
+    document.getElementById('step2').style.opacity = '1';
+    document.getElementById('step2').style.pointerEvents = 'auto';
+    document.getElementById('step2').classList.add('active');
+    currentStep = 2;
+    setProgress(66);
+    document.getElementById('step2').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function goToStep2FromPreview() {
+    document.getElementById('step3').style.display = 'none';
+    document.getElementById('step2').style.display = 'block';
+    document.getElementById('step2').classList.add('active');
+    setProgress(66);
+  }
+
+  function onFileSelect(input, cardId, nameId) {
+    const card = document.getElementById(cardId);
+    const nameEl = document.getElementById(nameId);
+    if (input.files[0]) {
+      card.classList.add('has-file');
+      nameEl.textContent = input.files[0].name;
+    }
+  }
+
+  async function fazerPreview() {
+    const produtos = document.getElementById('file-produtos').files[0];
+    const caixas = document.getElementById('file-caixas').files[0];
+    const painel = document.getElementById('file-painel').files[0];
+
+    if (!produtos || !caixas || !painel) {
+      showToast('error', 'Arquivos obrigatórios', 'Envie ao menos os 3 relatórios principais do YUZER.');
+      return;
+    }
+
+    const btn = document.getElementById('btn-preview');
+    btn.classList.add('loading');
+    btn.disabled = true;
+
+    try {
+      const fd = new FormData();
+      fd.append('produtos_vendidos', produtos);
+      fd.append('exportacao_caixas', caixas);
+      fd.append('painel_de_vendas', painel);
+      const tags = document.getElementById('file-tags').files[0];
+      if (tags) fd.append('tags', tags);
+
+      const res = await fetch(`${API}/api/preview`, { method: 'POST', body: fd });
+      const json = await res.json();
+
+      if (!json.success) throw new Error(json.error);
+
+      previewData = json.data;
+      renderPreview(json.data);
+
+      document.getElementById('step2').style.display = 'none';
+      document.getElementById('step3').style.display = 'block';
+      document.getElementById('step3').classList.add('active');
+      setProgress(90);
+      document.getElementById('step3').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    } catch (e) {
+      showToast('error', 'Erro ao processar', e.message);
+    } finally {
+      btn.classList.remove('loading');
+      btn.disabled = false;
+    }
+  }
+
+  function renderPreview(data) {
+    document.getElementById('preview-section').style.display = 'block';
+    const r = data.resumo || {};
+
+    // Metrics
+    const fmt = v => 'R$ ' + Number(v||0).toLocaleString('pt-BR', {minimumFractionDigits:2});
+    document.getElementById('metrics-grid').innerHTML = `
+      <div class="metric-card"><span class="metric-label">Total Faturado</span><span class="metric-value">${fmt(r.total_faturado)}</span></div>
+      <div class="metric-card"><span class="metric-label">Total Pedidos</span><span class="metric-value success">${r.total_pedidos||0}</span></div>
+      <div class="metric-card"><span class="metric-label">Ticket Médio</span><span class="metric-value">${fmt(r.ticket_medio)}</span></div>
+      <div class="metric-card"><span class="metric-label">Crédito</span><span class="metric-value">${fmt(r.credito)}</span></div>
+      <div class="metric-card"><span class="metric-label">Débito</span><span class="metric-value">${fmt(r.debito)}</span></div>
+      <div class="metric-card"><span class="metric-label">PIX</span><span class="metric-value">${fmt(r.pix)}</span></div>
+      <div class="metric-card"><span class="metric-label">Dinheiro</span><span class="metric-value">${fmt(r.dinheiro)}</span></div>
+    `;
+
+    // Produtos
+    const tbody = document.getElementById('tbody-produtos');
+    tbody.innerHTML = (data.produtos||[]).map(p => `
+      <tr>
+        <td>${p.produto}</td>
+        <td>${p.subcategoria||p.categoria||'-'}</td>
+        <td><strong>${p.qtd_vendida}</strong></td>
+        <td>${fmt(p.preco)}</td>
+        <td>${fmt(p.total)}</td>
+      </tr>
+    `).join('');
+
+    // Caixas
+    const tbodyC = document.getElementById('tbody-caixas');
+    tbodyC.innerHTML = (data.caixas||[]).map(c => `
+      <tr>
+        <td><strong>${c.usuario}</strong></td>
+        <td>${c.operacao}</td>
+        <td style="font-size:11px;color:var(--muted)">${c.serial}</td>
+        <td>${fmt(c.total)}</td>
+        <td>${fmt(c.dinheiro)}</td>
+        <td>${fmt(c.pix)}</td>
+        <td>${fmt(c.debito)}</td>
+        <td>${fmt(c.credito)}</td>
+      </tr>
+    `).join('');
+
+    // Pagamentos
+    const fp = (data.painel||{}).formas_pagamento||{};
+    document.getElementById('pagamentos-content').innerHTML = `
+      <div class="preview-grid">
+        ${Object.entries(fp).map(([k,v])=>`
+          <div class="metric-card">
+            <span class="metric-label">${k.replace('_',' ')}</span>
+            <span class="metric-value">${fmt(v)}</span>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  async function enviarParaSheets() {
+    const spreadsheetId = document.getElementById('spreadsheet-id').value.trim();
+    const produtos = document.getElementById('file-produtos').files[0];
+    const caixas = document.getElementById('file-caixas').files[0];
+    const painel = document.getElementById('file-painel').files[0];
+
+    const btn = document.getElementById('btn-enviar');
+    btn.classList.add('loading');
+    btn.disabled = true;
+
+    try {
+      const fd = new FormData();
+      fd.append('spreadsheet_id', spreadsheetId);
+      fd.append('produtos_vendidos', produtos);
+      fd.append('exportacao_caixas', caixas);
+      fd.append('painel_de_vendas', painel);
+      const tags = document.getElementById('file-tags').files[0];
+      if (tags) fd.append('tags', tags);
+
+      const res = await fetch(`${API}/api/enviar`, { method: 'POST', body: fd });
+      const json = await res.json();
+
+      if (!json.success) throw new Error(json.error);
+
+      // Show success
+      document.getElementById('main-flow').style.display = 'none';
+      const successEl = document.getElementById('success-section');
+      successEl.style.display = 'block';
+      setProgress(100);
+
+      const list = document.getElementById('detalhes-list');
+      list.innerHTML = (json.detalhes||[]).map(d => `<li>✅ ${d}</li>`).join('');
+
+    } catch (e) {
+      showToast('error', 'Erro ao enviar', e.message);
+    } finally {
+      btn.classList.remove('loading');
+      btn.disabled = false;
+    }
+  }
+
+  function showTab(tabId) {
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById(tabId).classList.add('active');
+    event.target.classList.add('active');
+  }
+
+  function showToast(type, title, body) {
+    const toast = document.getElementById('toast');
+    document.getElementById('toast-icon').textContent = type === 'success' ? '✅' : '❌';
+    document.getElementById('toast-title').textContent = title;
+    document.getElementById('toast-body').textContent = body;
+    toast.className = `toast ${type}`;
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 4000);
+  }
+
+  function resetApp() {
+    document.getElementById('main-flow').style.display = 'grid';
+    document.getElementById('success-section').style.display = 'none';
+    document.getElementById('spreadsheet-id').value = '';
+    ['produtos','caixas','painel','tags'].forEach(f => {
+      document.getElementById(`file-${f}`).value = '';
+      document.getElementById(`card-${f}`).classList.remove('has-file');
+      document.getElementById(`name-${f}`).textContent = '';
+    });
+    document.getElementById('step1').className = 'step active';
+    document.getElementById('step1').querySelector('.step-num').textContent = '1';
+    document.getElementById('step2').style.opacity = '0.5';
+    document.getElementById('step2').style.pointerEvents = 'none';
+    document.getElementById('step2').classList.remove('active', 'completed');
+    document.getElementById('step2').style.display = 'block';
+    document.getElementById('step3').style.display = 'none';
+    setProgress(33);
+    previewData = null;
+  }
+</script>
+</body>
+</html>
