@@ -6,6 +6,7 @@ import os
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 import io
+import re
 
 app = Flask(__name__, static_folder='static')
 CORS(app)
@@ -23,12 +24,17 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 def get_sheets_service():
     creds_json = os.environ.get('GOOGLE_CREDENTIALS')
     if not creds_json:
-        raise Exception("Credenciais do Google não configuradas. Defina a variável GOOGLE_CREDENTIALS.")
+        raise Exception("Credenciais do Google nao configuradas.")
     creds_info = json.loads(creds_json)
     creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
     return build('sheets', 'v4', credentials=creds)
 
-def parse_produtos_vendidos(file_bytes):
+# ---------------------------------------------------------------------------
+# Parsers
+# ---------------------------------------------------------------------------
+
+def parse_produtos(file_bytes):
+    """Parseia arquivo de produtos vendidos OU bonus - mesma estrutura YUZER."""
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     ws = wb.active
     produtos = []
@@ -39,17 +45,11 @@ def parse_produtos_vendidos(file_bytes):
             continue
         if header_row and row[0] is not None:
             produtos.append({
-                'produto': row[0],
-                'tipo': row[1],
-                'categoria': row[2],
-                'subcategoria': row[3],
-                'qtd_vendida': row[5] or 0,
-                'qtd_devolvida': row[6] or 0,
-                'quantidade': row[7] or 0,
-                'preco': row[8] or 0,
+                'produto':       row[0],
+                'subcategoria':  row[3],
+                'qtd_vendida':   row[5] or 0,
+                'preco':         row[8] or 0,
                 'total_vendido': row[10] or 0,
-                'total_devolvido': row[11] or 0,
-                'total': row[12] or 0,
             })
     return produtos
 
@@ -64,24 +64,13 @@ def parse_caixas(file_bytes):
             continue
         if header_row and row[0] is not None:
             caixas.append({
-                'id': row[0],
-                'usuario': row[1],
-                'cpf': row[2],
-                'serial': row[3],
-                'painel': row[4],
-                'operacao': row[5],
-                'total': row[6] or 0,
-                'reimpressoes': row[7] or 0,
-                'canceladas': row[8] or 0,
-                'qtd_vendas': row[9] or 0,
-                'dinheiro_caixa': row[10] or 0,
-                'produtos_retornados': row[11] or 0,
-                'credito': row[12] or 0,
-                'debito': row[13] or 0,
-                'pix': row[14] or 0,
+                'usuario':  row[1],
+                'serial':   row[3],
+                'total':    row[6] or 0,
+                'credito':  row[12] or 0,
+                'debito':   row[13] or 0,
+                'pix':      row[14] or 0,
                 'dinheiro': row[15] or 0,
-                'insercao_cashless': row[16] or 0,
-                'subtotal': row[17] or 0,
             })
     return caixas
 
@@ -99,41 +88,216 @@ def parse_painel_vendas(file_bytes):
         if key == 'Formas de Pagamento':
             reading_pagamentos = True
             continue
-        if key == 'Operações':
+        if key in ('Operacoes', 'Operações'):
             reading_pagamentos = False
             continue
         if reading_pagamentos and val is not None:
             formas_pagamento[key] = val
-        elif key in ['Total', 'Pedidos', 'Média', 'Devolução de pedidos']:
+        elif key in ('Total', 'Pedidos', 'Media', 'Média'):
             painel[key] = val
     painel['formas_pagamento'] = formas_pagamento
     return painel
 
+# ---------------------------------------------------------------------------
+# Mapeamento YUZER -> Planilha
+# ---------------------------------------------------------------------------
+
+MAPA_SUBCAT = {
+    'BEBIDAS NAO ALCOOLICAS': 'BEBIDAS NAO ALCOOLICAS',
+    'BEBIDAS NÃO ALCOOLICAS': 'BEBIDAS NAO ALCOOLICAS',
+    'BEBIDAS ALCOOLICAS':     'BEBIDAS ALCOOLICAS',
+    'DESTILADOS':             'DESTILADOS',
+    'DOSES':                  'DOSES & OUTROS',
+    'DRINKS':                 'DRINK',
+    'COMBOS':                 'COMBOS',
+    'OUTROS':                 'DOSES & OUTROS',
+}
+
+# Linha inicial no CADASTRO por categoria
+CAT_INICIO = {
+    'BEBIDAS NAO ALCOOLICAS': 16,
+    'BEBIDAS ALCOOLICAS':     32,
+    'DESTILADOS':             39,
+    'COMBOS':                 52,
+    'DRINK':                  68,
+    'DOSES & OUTROS':         79,
+}
+
+CAT_MAX = {
+    'BEBIDAS NAO ALCOOLICAS': 15,
+    'BEBIDAS ALCOOLICAS':     6,
+    'DESTILADOS':             12,
+    'COMBOS':                 15,
+    'DRINK':                  10,
+    'DOSES & OUTROS':         8,
+}
+
+# CADASTRO linha X -> ESTOQUE / RELATORIO / PRODUCAO linha (X - 10)
+OFFSET = -10
+
+
+def organizar_por_categoria(produtos):
+    agrupado = {cat: [] for cat in CAT_INICIO}
+    for p in produtos:
+        subcat = (p.get('subcategoria') or '').strip().upper()
+        cat = MAPA_SUBCAT.get(subcat, 'DOSES & OUTROS')
+        agrupado[cat].append(p)
+    return agrupado
+
+
+def merge_vendas_bonus(vendas, bonus):
+    """
+    Une produtos de vendas e bonus pelo nome.
+      qtd_vendida_pura = so vendas  -> RELATORIO DE VENDA col B
+      qtd_bonus        = so bonus   -> PRODUCAO col C (Cartao 1)
+      qtd_sistema      = vendas + bonus -> ESTOQUE col I
+    """
+    bonus_map = {(p['produto'] or '').strip().upper(): p for p in bonus}
+    merged = []
+    nomes_vistos = set()
+
+    for p in vendas:
+        nome_norm = (p['produto'] or '').strip().upper()
+        nomes_vistos.add(nome_norm)
+        b = bonus_map.get(nome_norm)
+        qtd_bon = b['qtd_vendida'] if b else 0
+        merged.append({
+            **p,
+            'qtd_vendida_pura': p['qtd_vendida'],
+            'qtd_bonus':        qtd_bon,
+            'qtd_sistema':      p['qtd_vendida'] + qtd_bon,
+        })
+
+    # Produtos que existem apenas no bonus (nao estavam em vendas)
+    for p in bonus:
+        nome_norm = (p['produto'] or '').strip().upper()
+        if nome_norm not in nomes_vistos:
+            merged.append({
+                **p,
+                'qtd_vendida_pura': 0,
+                'qtd_bonus':        p['qtd_vendida'],
+                'qtd_sistema':      p['qtd_vendida'],
+            })
+
+    return merged
+
+# ---------------------------------------------------------------------------
+# Builders de update
+# ---------------------------------------------------------------------------
+
+def build_cadastro_updates(agrupado_vendas):
+    """
+    CADASTRO col B = nome do produto
+    CADASTRO col F = preco de venda
+    A planilha propaga automaticamente para ESTOQUE, RELATORIO, etc.
+    """
+    updates = []
+    for cat, prods in agrupado_vendas.items():
+        if not prods:
+            continue
+        inicio = CAT_INICIO[cat]
+        prods = prods[:CAT_MAX[cat]]
+        updates.append({
+            'range': f"CADASTRO!B{inicio}:B{inicio + len(prods) - 1}",
+            'values': [[p['produto']] for p in prods],
+        })
+        updates.append({
+            'range': f"CADASTRO!F{inicio}:F{inicio + len(prods) - 1}",
+            'values': [[p['preco']] for p in prods],
+        })
+    return updates
+
+
+def build_estoque_updates(agrupado_merged):
+    """
+    ESTOQUE col I = qtd_sistema (vendas + bonus = Consumo Sistema total).
+    Col K NAO e preenchida — a planilha ja puxa do CADASTRO via formula.
+    """
+    updates = []
+    for cat, prods in agrupado_merged.items():
+        if not prods:
+            continue
+        inicio_est = CAT_INICIO[cat] + OFFSET
+        prods = prods[:CAT_MAX[cat]]
+        updates.append({
+            'range': f"ESTOQUE!I{inicio_est}:I{inicio_est + len(prods) - 1}",
+            'values': [[p.get('qtd_sistema', p['qtd_vendida'])] for p in prods],
+        })
+    return updates
+
+
+def build_relatorio_updates(agrupado_merged):
+    """
+    RELATORIO DE VENDA col B = apenas qtd_vendida_pura (SEM bonus).
+    Somente Beb. Nao Alcoolicas precisa ser gravada diretamente;
+    as demais categorias calculam automaticamente via formula
+    =ESTOQUE!Ix - ESTOQUE!Gx ja existente na planilha.
+    """
+    updates = []
+    cat = 'BEBIDAS NAO ALCOOLICAS'
+    prods = agrupado_merged.get(cat, [])
+    if not prods:
+        return updates
+    inicio_rel = CAT_INICIO[cat] + OFFSET
+    prods = prods[:CAT_MAX[cat]]
+    updates.append({
+        'range': f"RELATORIO DE VENDA!B{inicio_rel}:B{inicio_rel + len(prods) - 1}",
+        'values': [[p.get('qtd_vendida_pura', p['qtd_vendida'])] for p in prods],
+    })
+    return updates
+
+
+def build_producao_cartao1_updates(agrupado_merged):
+    """
+    PRODUCAO col C (Cartao 1) = qtd_bonus por produto.
+    Mesma logica de offset: CADASTRO linha X -> PRODUCAO linha (X - 10).
+    Bonus e centralizado aqui para que ESTOQUE col G seja calculado
+    automaticamente pela formula ='PRODUCAO'!O que ja existe na planilha.
+    """
+    updates = []
+    for cat, prods in agrupado_merged.items():
+        if not prods:
+            continue
+        inicio_prod = CAT_INICIO[cat] + OFFSET
+        prods = prods[:CAT_MAX[cat]]
+        # So grava se houver pelo menos um bonus > 0
+        bonus_vals = [[p.get('qtd_bonus', 0)] for p in prods]
+        if any(v[0] > 0 for v in bonus_vals):
+            updates.append({
+                'range': f"PRODUCAO!C{inicio_prod}:C{inicio_prod + len(prods) - 1}",
+                'values': bonus_vals,
+            })
+    return updates
+
+# ---------------------------------------------------------------------------
+# Rotas
+# ---------------------------------------------------------------------------
+
 @app.route('/api/preview', methods=['POST'])
 def preview():
     try:
-        files = request.files
         result = {}
 
-        if 'produtos_vendidos' in files:
-            result['produtos'] = parse_produtos_vendidos(files['produtos_vendidos'].read())
+        if 'produtos_vendidos' in request.files:
+            result['produtos'] = parse_produtos(request.files['produtos_vendidos'].read())
 
-        if 'exportacao_caixas' in files:
-            result['caixas'] = parse_caixas(files['exportacao_caixas'].read())
+        if 'produtos_bonus' in request.files:
+            result['bonus'] = parse_produtos(request.files['produtos_bonus'].read())
 
-        if 'painel_de_vendas' in files:
-            result['painel'] = parse_painel_vendas(files['painel_de_vendas'].read())
+        if 'exportacao_caixas' in request.files:
+            result['caixas'] = parse_caixas(request.files['exportacao_caixas'].read())
 
-        # Summary
-        if 'painel' in result:
-            fp = result['painel'].get('formas_pagamento', {})
+        if 'painel_de_vendas' in request.files:
+            painel = parse_painel_vendas(request.files['painel_de_vendas'].read())
+            result['painel'] = painel
+            fp = painel.get('formas_pagamento', {})
             result['resumo'] = {
-                'total_faturado': result['painel'].get('Total', 0),
-                'total_pedidos': result['painel'].get('Pedidos', 0),
-                'ticket_medio': result['painel'].get('Média', 0),
-                'credito': fp.get('CREDIT_CARD', 0),
-                'debito': fp.get('DEBIT_CARD', 0),
-                'pix': fp.get('PIX', 0),
+                'total_faturado': painel.get('Total', 0),
+                'total_pedidos':  painel.get('Pedidos', 0),
+                'ticket_medio':   painel.get('Média', painel.get('Media', 0)),
+                'credito':  fp.get('CREDIT_CARD', 0),
+                'debito':   fp.get('DEBIT_CARD', 0),
+                'pix':      fp.get('PIX', 0),
                 'dinheiro': fp.get('CASH', 0),
             }
 
@@ -141,93 +305,91 @@ def preview():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 400
 
+
 @app.route('/api/enviar', methods=['POST'])
 def enviar():
     try:
         spreadsheet_id = request.form.get('spreadsheet_id', '').strip()
         if not spreadsheet_id:
-            return jsonify({'success': False, 'error': 'ID da planilha não informado.'}), 400
+            return jsonify({'success': False, 'error': 'ID da planilha nao informado.'}), 400
 
-        # Extract spreadsheet ID from URL if full URL provided
         if 'docs.google.com' in spreadsheet_id:
-            import re
             match = re.search(r'/d/([a-zA-Z0-9-_]+)', spreadsheet_id)
             if match:
                 spreadsheet_id = match.group(1)
 
         service = get_sheets_service()
-        updates = []
+        batch_data = []
+        descriptions = []
 
-        # Parse produtos
+        # --- Produtos vendidos + bonus ---
         if 'produtos_vendidos' in request.files:
-            produtos = parse_produtos_vendidos(request.files['produtos_vendidos'].read())
-            # Write to RELATORIO DE VENDA - column B (Sistema) starting row 5
-            # Map by product name matching column A
-            prod_map = {p['produto'].strip().upper(): p for p in produtos}
-            updates.append({
-                'range': 'RELATORIO DE VENDA!B5',
-                'values': [[p['qtd_vendida']] for p in produtos[:15]],
-                'description': f'{len(produtos)} produtos mapeados'
-            })
+            vendas = parse_produtos(request.files['produtos_vendidos'].read())
+            bonus = []
+            if 'produtos_bonus' in request.files:
+                bonus = parse_produtos(request.files['produtos_bonus'].read())
 
-        # Parse caixas
+            merged = merge_vendas_bonus(vendas, bonus)
+            agrupado_vendas = organizar_por_categoria(vendas)
+            agrupado_merged = organizar_por_categoria(merged)
+
+            # 1. CADASTRO — nome (col B) e preco (col F)
+            #    A planilha propaga automaticamente para ESTOQUE K, RELATORIO C, etc.
+            for u in build_cadastro_updates(agrupado_vendas):
+                batch_data.append({'range': u['range'], 'values': u['values']})
+            total_prods = sum(len(v) for v in agrupado_vendas.values())
+            descriptions.append(f'CADASTRO: {total_prods} produtos e precos preenchidos')
+
+            # 2. ESTOQUE col I = vendas + bonus (Consumo Sistema total)
+            for u in build_estoque_updates(agrupado_merged):
+                batch_data.append({'range': u['range'], 'values': u['values']})
+            descriptions.append('ESTOQUE: col I (Consumo Sistema = vendas + bonus)')
+
+            # 3. RELATORIO DE VENDA col B = apenas vendas (sem bonus)
+            for u in build_relatorio_updates(agrupado_merged):
+                batch_data.append({'range': u['range'], 'values': u['values']})
+            descriptions.append('RELATORIO DE VENDA: col B preenchida apenas com vendas')
+
+            # 4. PRODUCAO col C (Cartao 1) = bonus por produto
+            if bonus:
+                for u in build_producao_cartao1_updates(agrupado_merged):
+                    batch_data.append({'range': u['range'], 'values': u['values']})
+                descriptions.append('PRODUCAO: col C (Cartao 1) preenchida com consumo bonus')
+
+        # --- Caixas ---
         if 'exportacao_caixas' in request.files:
             caixas = parse_caixas(request.files['exportacao_caixas'].read())
-            # Write to FECHAMENTO CAIXAS starting row 3
-            # Columns: B=nome, C=serial, D=total, E=dinheiro, F=pix, G=debito, H=credito
-            caixas_values = []
-            for c in caixas:
-                caixas_values.append([
-                    c['usuario'],
-                    c['serial'],
-                    c['total'],
-                    c['dinheiro'],
-                    c['pix'],
-                    c['debito'],
-                    c['credito'],
-                ])
-            updates.append({
-                'range': f"FECHAMENTO CAIXAS!B3:H{2+len(caixas_values)}",
+            caixas_values = [[
+                c['usuario'], c['serial'], c['total'],
+                c['dinheiro'], c['pix'], c['debito'], c['credito'],
+            ] for c in caixas]
+            batch_data.append({
+                'range': f"FECHAMENTO CAIXAS!B3:H{2 + len(caixas_values)}",
                 'values': caixas_values,
-                'description': f'{len(caixas_values)} caixas/garçons mapeados'
             })
+            descriptions.append(f'FECHAMENTO CAIXAS: {len(caixas_values)} operadores preenchidos')
 
-        # Parse painel - write totals to RESUMO
+        # --- Painel → RESUMO ---
         if 'painel_de_vendas' in request.files:
             painel = parse_painel_vendas(request.files['painel_de_vendas'].read())
             fp = painel.get('formas_pagamento', {})
-            # RESUMO: B3=APP/0, B4=Dinheiro, B5=Credito, B6=Debito, B7=PIX
-            resumo_values = [
-                [0],                              # B3 APP
-                [fp.get('CASH', 0)],              # B4 Dinheiro
-                [fp.get('CREDIT_CARD', 0)],       # B5 Credito
-                [fp.get('DEBIT_CARD', 0)],        # B6 Debito
-                [fp.get('PIX', 0)],               # B7 PIX
-            ]
-            updates.append({
-                'range': 'RESUMO!B3:B7',
-                'values': resumo_values,
-                'description': 'Totais por forma de pagamento no RESUMO'
-            })
-
-        # Execute all updates
-        batch_data = []
-        for upd in updates:
             batch_data.append({
-                'range': upd['range'],
-                'values': upd['values']
+                'range': 'RESUMO!B3:B7',
+                'values': [
+                    [0],
+                    [fp.get('CASH', 0)],
+                    [fp.get('CREDIT_CARD', 0)],
+                    [fp.get('DEBIT_CARD', 0)],
+                    [fp.get('PIX', 0)],
+                ],
             })
+            descriptions.append('RESUMO: totais por forma de pagamento preenchidos')
 
-        body = {
-            'valueInputOption': 'USER_ENTERED',
-            'data': batch_data
-        }
         service.spreadsheets().values().batchUpdate(
             spreadsheetId=spreadsheet_id,
-            body=body
+            body={'valueInputOption': 'USER_ENTERED', 'data': batch_data}
         ).execute()
 
-        descriptions = [u['description'] for u in updates]
         return jsonify({
             'success': True,
             'message': 'Dados enviados com sucesso para o Google Sheets!',
@@ -237,9 +399,11 @@ def enviar():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 400
 
+
 @app.route('/api/health', methods=['GET'])
 def health():
     return jsonify({'status': 'ok', 'app': 'Prime Bar - YUZER Integration'})
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
