@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import openpyxl
 import json
@@ -7,8 +7,16 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 import io
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static')
 CORS(app)
+
+@app.route('/')
+def index():
+    return send_from_directory(app.static_folder, 'index.html')
+
+@app.route('/<path:path>')
+def static_files(path):
+    return send_from_directory(app.static_folder, path)
 
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
