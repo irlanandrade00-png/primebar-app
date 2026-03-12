@@ -713,7 +713,7 @@
         <label class="upload-card" id="card-caixas">
           <input type="file" id="file-caixas" accept=".xlsx" onchange="onFileSelect(this, 'card-caixas', 'name-caixas')">
           <span class="upload-icon">💳</span>
-          <span class="upload-label">Exportação Caixas</span>
+          <span class="upload-label">Fechamento de Caixa</span>
           <span class="upload-desc">exportacao_caixas_*.xlsx</span>
           <span class="upload-filename" id="name-caixas"></span>
         </label>
@@ -727,10 +727,10 @@
         </label>
 
         <label class="upload-card" id="card-tags">
-          <input type="file" id="file-tags" accept=".xlsx" onchange="onFileSelect(this, 'card-tags', 'name-tags')">
+          <input type="file" id="file-tags" accept=".xlsx,.pdf" onchange="onFileSelect(this, 'card-tags', 'name-tags')">
           <span class="upload-icon">🏷️</span>
-          <span class="upload-label">Tags do Painel</span>
-          <span class="upload-desc">exportacao_tags_*.xlsx</span>
+          <span class="upload-label">Bônus ou Cortesia</span>
+          <span class="upload-desc">produtos_bonus_*.pdf / .xlsx</span>
           <span class="upload-filename" id="name-tags"></span>
           <span class="optional-badge">Opcional</span>
         </label>
@@ -916,7 +916,7 @@
       fd.append('exportacao_caixas', caixas);
       fd.append('painel_de_vendas', painel);
       const tags = document.getElementById('file-tags').files[0];
-      if (tags) fd.append('tags', tags);
+      if (tags) fd.append('produtos_bonus', tags);
 
       const res = await fetch(`${API}/api/preview`, { method: 'POST', body: fd });
       const json = await res.json();
@@ -1014,7 +1014,7 @@
       fd.append('exportacao_caixas', caixas);
       fd.append('painel_de_vendas', painel);
       const tags = document.getElementById('file-tags').files[0];
-      if (tags) fd.append('tags', tags);
+      if (tags) fd.append('produtos_bonus', tags);
 
       const res = await fetch(`${API}/api/enviar`, { method: 'POST', body: fd });
       const json = await res.json();
