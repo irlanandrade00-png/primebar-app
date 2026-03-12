@@ -759,9 +759,11 @@
         <div class="preview-grid" id="metrics-grid"></div>
 
         <div class="tabs">
-          <button class="tab-btn active" onclick="showTab('tab-produtos')">📦 Produtos</button>
-          <button class="tab-btn" onclick="showTab('tab-caixas')">💳 Caixas</button>
-          <button class="tab-btn" onclick="showTab('tab-pagamentos')">💰 Pagamentos</button>
+          <button class="tab-btn active" onclick="showTab('tab-produtos', this)">📦 Produtos</button>
+          <button class="tab-btn" onclick="showTab('tab-bonus', this)">🎁 Bônus/Cortesia</button>
+          <button class="tab-btn" onclick="showTab('tab-caixas', this)">💳 Caixas</button>
+          <button class="tab-btn" onclick="showTab('tab-pagamentos', this)">💰 Pagamentos</button>
+          <button class="tab-btn" onclick="showTab('tab-conciliacao', this)">⚠️ Conciliação</button>
         </div>
 
         <div class="tab-content active" id="tab-produtos">
@@ -781,13 +783,30 @@
           </div>
         </div>
 
+        <div class="tab-content" id="tab-bonus">
+          <div id="bonus-summary-top" style="margin-bottom:16px;"></div>
+          <div class="table-scroll">
+            <table class="preview-table">
+              <thead>
+                <tr>
+                  <th>Produto</th>
+                  <th>Categoria</th>
+                  <th>Qtd Cortesia</th>
+                  <th>Preço Unit.</th>
+                  <th>Total Cortesia</th>
+                </tr>
+              </thead>
+              <tbody id="tbody-bonus"></tbody>
+            </table>
+          </div>
+        </div>
+
         <div class="tab-content" id="tab-caixas">
           <div class="table-scroll">
             <table class="preview-table">
               <thead>
                 <tr>
                   <th>Operador</th>
-                  <th>Operação</th>
                   <th>Serial</th>
                   <th>Total</th>
                   <th>Dinheiro</th>
@@ -803,6 +822,10 @@
 
         <div class="tab-content" id="tab-pagamentos">
           <div id="pagamentos-content"></div>
+        </div>
+
+        <div class="tab-content" id="tab-conciliacao">
+          <div id="conciliacao-content"></div>
         </div>
       </div>
 
@@ -838,6 +861,21 @@
   <div>
     <div class="toast-title" id="toast-title"></div>
     <div class="toast-body" id="toast-body"></div>
+  </div>
+</div>
+
+<!-- HISTÓRICO -->
+<div class="step" id="historico-section" style="margin-top:32px;">
+  <div class="step-header">
+    <div class="step-num" style="background:var(--gold);color:var(--black);">🕐</div>
+    <div>
+      <div class="step-title">Histórico de Eventos</div>
+      <div class="step-subtitle">Últimos envios realizados neste navegador</div>
+    </div>
+    <button class="btn btn-secondary" onclick="limparHistorico()" style="margin-left:auto;font-size:12px;padding:8px 14px;">🗑 Limpar</button>
+  </div>
+  <div id="historico-lista">
+    <p style="color:var(--muted);font-size:13px;text-align:center;padding:20px 0;">Nenhum evento registrado ainda.</p>
   </div>
 </div>
 
@@ -943,9 +981,9 @@
   function renderPreview(data) {
     document.getElementById('preview-section').style.display = 'block';
     const r = data.resumo || {};
+    const fmt = v => 'R$ ' + Number(v||0).toLocaleString('pt-BR', {minimumFractionDigits:2});
 
     // Metrics
-    const fmt = v => 'R$ ' + Number(v||0).toLocaleString('pt-BR', {minimumFractionDigits:2});
     document.getElementById('metrics-grid').innerHTML = `
       <div class="metric-card"><span class="metric-label">Total Faturado</span><span class="metric-value">${fmt(r.total_faturado)}</span></div>
       <div class="metric-card"><span class="metric-label">Total Pedidos</span><span class="metric-value success">${r.total_pedidos||0}</span></div>
@@ -956,24 +994,49 @@
       <div class="metric-card"><span class="metric-label">Dinheiro</span><span class="metric-value">${fmt(r.dinheiro)}</span></div>
     `;
 
-    // Produtos
+    // Produtos vendidos
     const tbody = document.getElementById('tbody-produtos');
     tbody.innerHTML = (data.produtos||[]).map(p => `
       <tr>
         <td>${p.produto}</td>
-        <td>${p.subcategoria||p.categoria||'-'}</td>
+        <td>${p.subcategoria||p.cat||'-'}</td>
         <td><strong>${p.qtd_vendida}</strong></td>
         <td>${fmt(p.preco)}</td>
-        <td>${fmt(p.total)}</td>
+        <td>${fmt((p.qtd_vendida||0)*(p.preco||0))}</td>
       </tr>
     `).join('');
+
+    // Bônus/Cortesia
+    const bonus = data.bonus || [];
+    const tbodyB = document.getElementById('tbody-bonus');
+    if (bonus.length === 0) {
+      tbodyB.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:24px;">Nenhum arquivo de bônus/cortesia enviado.</td></tr>';
+      document.getElementById('bonus-summary-top').innerHTML = '';
+    } else {
+      const totalQtd = bonus.reduce((s,p) => s + (p.qtd_vendida||0), 0);
+      const totalVal = bonus.reduce((s,p) => s + (p.qtd_vendida||0)*(p.preco||0), 0);
+      document.getElementById('bonus-summary-top').innerHTML = `
+        <div class="preview-grid" style="margin-bottom:0">
+          <div class="metric-card"><span class="metric-label">Total Itens Cortesia</span><span class="metric-value success">${totalQtd}</span></div>
+          <div class="metric-card"><span class="metric-label">Valor Total Cortesia</span><span class="metric-value" style="color:var(--error)">${fmt(totalVal)}</span></div>
+          <div class="metric-card"><span class="metric-label">Produtos Distintos</span><span class="metric-value">${bonus.length}</span></div>
+        </div>`;
+      tbodyB.innerHTML = bonus.map(p => `
+        <tr>
+          <td>${p.produto}</td>
+          <td>${p.subcategoria||p.cat||'-'}</td>
+          <td><strong style="color:var(--gold)">${p.qtd_vendida}</strong></td>
+          <td>${fmt(p.preco)}</td>
+          <td style="color:var(--error)">${fmt((p.qtd_vendida||0)*(p.preco||0))}</td>
+        </tr>
+      `).join('');
+    }
 
     // Caixas
     const tbodyC = document.getElementById('tbody-caixas');
     tbodyC.innerHTML = (data.caixas||[]).map(c => `
       <tr>
         <td><strong>${c.usuario}</strong></td>
-        <td>${c.operacao}</td>
         <td style="font-size:11px;color:var(--muted)">${c.serial}</td>
         <td>${fmt(c.total)}</td>
         <td>${fmt(c.dinheiro)}</td>
@@ -985,16 +1048,60 @@
 
     // Pagamentos
     const fp = (data.painel||{}).formas_pagamento||{};
+    const nomesFP = {CREDIT_CARD:'Crédito', DEBIT_CARD:'Débito', PIX:'PIX', CASH:'Dinheiro'};
     document.getElementById('pagamentos-content').innerHTML = `
       <div class="preview-grid">
         ${Object.entries(fp).map(([k,v])=>`
           <div class="metric-card">
-            <span class="metric-label">${k.replace('_',' ')}</span>
+            <span class="metric-label">${nomesFP[k]||k}</span>
             <span class="metric-value">${fmt(v)}</span>
           </div>
         `).join('')}
+      </div>`;
+
+    // Conciliação
+    const ci = data.conciliacao_info || {};
+    const produtosYuzer = data.produtos || [];
+    const bonusYuzer = data.bonus || [];
+    const catNomes = {'BEBIDAS NAO ALCOOLICAS':'Beb. Não Alc.','BEBIDAS ALCOOLICAS':'Beb. Alcoólicas','DESTILADOS':'Destilados','COMBOS':'Combos','DRINK':'Drinks','DOSES & OUTROS':'Doses & Outros'};
+    const porCat = {};
+    produtosYuzer.forEach(p => {
+      if (!porCat[p.cat]) porCat[p.cat] = {vendas:0, bonus:0};
+      porCat[p.cat].vendas++;
+    });
+    bonusYuzer.forEach(p => {
+      if (!porCat[p.cat]) porCat[p.cat] = {vendas:0, bonus:0};
+      porCat[p.cat].bonus++;
+    });
+    document.getElementById('conciliacao-content').innerHTML = `
+      <div class="guide-box" style="margin-bottom:16px;">
+        <h4>ℹ️ Como funciona a conciliação</h4>
+        <p style="font-size:13px;color:var(--muted);line-height:1.6;">
+          O sistema concilia os produtos do YUZER com a planilha pelo <strong style="color:var(--white)">preço + posição por categoria</strong>.
+          Se dois produtos têm o mesmo preço na mesma categoria, o 1º no YUZER vai para o 1º na planilha.
+          Confira abaixo quantos produtos por categoria foram lidos dos arquivos.
+        </p>
       </div>
-    `;
+      <div class="table-scroll">
+        <table class="preview-table">
+          <thead>
+            <tr><th>Categoria</th><th>Produtos Vendidos</th><th>Produtos Bônus</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            ${Object.entries(porCat).map(([cat, v]) => `
+              <tr>
+                <td>${catNomes[cat]||cat}</td>
+                <td><strong>${v.vendas}</strong></td>
+                <td><strong style="color:var(--gold)">${v.bonus}</strong></td>
+                <td><span style="color:var(--success)">✅ Lido</span></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin-top:12px;">
+        ⚠️ Produtos com preço não encontrado na planilha serão indicados nos <strong>avisos</strong> após o envio.
+      </p>`;
   }
 
   async function enviarParaSheets() {
@@ -1021,6 +1128,9 @@
 
       if (!json.success) throw new Error(json.error);
 
+      // Salvar no histórico
+      salvarHistorico(json);
+
       // Show success
       document.getElementById('main-flow').style.display = 'none';
       const successEl = document.getElementById('success-section');
@@ -1028,7 +1138,11 @@
       setProgress(100);
 
       const list = document.getElementById('detalhes-list');
-      list.innerHTML = (json.detalhes||[]).map(d => `<li>✅ ${d}</li>`).join('');
+      let itens = (json.detalhes||[]).map(d => `<li>✅ ${d}</li>`);
+      if (json.avisos && json.avisos.length > 0) {
+        itens = itens.concat(json.avisos.map(a => `<li style="color:var(--gold)">⚠️ ${a}</li>`));
+      }
+      list.innerHTML = itens.join('');
 
     } catch (e) {
       showToast('error', 'Erro ao enviar', e.message);
@@ -1038,11 +1152,11 @@
     }
   }
 
-  function showTab(tabId) {
+  function showTab(tabId, btn) {
     document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.getElementById(tabId).classList.add('active');
-    event.target.classList.add('active');
+    if (btn) btn.classList.add('active');
   }
 
   function showToast(type, title, body) {
@@ -1054,6 +1168,65 @@
     toast.classList.add('show');
     setTimeout(() => toast.classList.remove('show'), 4000);
   }
+
+  // =========================================================
+  // HISTÓRICO DE EVENTOS
+  // =========================================================
+  function salvarHistorico(json) {
+    const historico = JSON.parse(localStorage.getItem('primebar_historico') || '[]');
+    const nome = document.getElementById('spreadsheet-id').value.trim();
+    const r = previewData && previewData.resumo ? previewData.resumo : {};
+    historico.unshift({
+      data: new Date().toLocaleString('pt-BR'),
+      planilha: nome.length > 60 ? nome.slice(0,60)+'...' : nome,
+      total: r.total_faturado || 0,
+      pedidos: r.total_pedidos || 0,
+      detalhes: json.detalhes || [],
+      avisos: json.avisos || [],
+    });
+    // Manter só os 20 últimos
+    if (historico.length > 20) historico.length = 20;
+    localStorage.setItem('primebar_historico', JSON.stringify(historico));
+    renderHistorico();
+  }
+
+  function renderHistorico() {
+    const historico = JSON.parse(localStorage.getItem('primebar_historico') || '[]');
+    const container = document.getElementById('historico-lista');
+    const fmt = v => 'R$ ' + Number(v||0).toLocaleString('pt-BR', {minimumFractionDigits:2});
+    if (historico.length === 0) {
+      container.innerHTML = '<p style="color:var(--muted);font-size:13px;text-align:center;padding:20px 0;">Nenhum evento registrado ainda.</p>';
+      return;
+    }
+    container.innerHTML = historico.map((h, i) => `
+      <div style="background:var(--black);border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
+          <div>
+            <div style="font-size:13px;font-weight:600;color:var(--white);margin-bottom:4px;">${h.data}</div>
+            <div style="font-size:11px;color:var(--muted);word-break:break-all;">${h.planilha}</div>
+          </div>
+          <div style="text-align:right;flex-shrink:0;">
+            <div style="font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--gold);">${fmt(h.total)}</div>
+            <div style="font-size:11px;color:var(--muted)">${h.pedidos} pedidos</div>
+          </div>
+        </div>
+        ${h.avisos && h.avisos.length > 0 ? `
+          <div style="margin-top:10px;padding:8px 12px;background:rgba(201,168,76,0.08);border-radius:6px;border:1px solid rgba(201,168,76,0.2);">
+            ${h.avisos.map(a => `<div style="font-size:11px;color:var(--gold)">⚠️ ${a}</div>`).join('')}
+          </div>` : ''}
+      </div>
+    `).join('');
+  }
+
+  function limparHistorico() {
+    if (confirm('Limpar todo o histórico?')) {
+      localStorage.removeItem('primebar_historico');
+      renderHistorico();
+    }
+  }
+
+  // Carregar histórico ao iniciar
+  document.addEventListener('DOMContentLoaded', renderHistorico);
 
   function resetApp() {
     document.getElementById('main-flow').style.display = 'grid';
