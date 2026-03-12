@@ -412,15 +412,20 @@ def preview():
     try:
         result = {}
 
+        vendas = []
+        bonus  = []
+
         if 'produtos_vendidos' in request.files:
-            result['produtos'] = parse_produtos_xlsx(request.files['produtos_vendidos'].read())
+            vendas = parse_produtos_xlsx(request.files['produtos_vendidos'].read())
+            result['produtos'] = vendas
 
         if 'produtos_bonus' in request.files:
             b_bytes = request.files['produtos_bonus'].read()
-            fname = request.files['produtos_bonus'].filename or ''
-            result['bonus'] = (parse_bonus_pdf(b_bytes)
-                               if fname.lower().endswith('.pdf')
-                               else parse_produtos_xlsx(b_bytes))
+            fname   = request.files['produtos_bonus'].filename or ''
+            bonus   = (parse_bonus_pdf(b_bytes)
+                       if fname.lower().endswith('.pdf')
+                       else parse_produtos_xlsx(b_bytes))
+            result['bonus'] = bonus
 
         if 'exportacao_caixas' in request.files:
             result['caixas'] = parse_caixas(request.files['exportacao_caixas'].read())
@@ -438,6 +443,22 @@ def preview():
                 'pix':            fp.get('PIX', 0),
                 'dinheiro':       fp.get('CASH', 0),
             }
+
+        # Conciliação: produtos do YUZER não encontrados na planilha
+        # (só disponível se houver vendas e bônus — catálogo lido no /enviar)
+        # No preview, indicamos quais preços existem nos arquivos YUZER
+        precos_vendas = {}
+        for p in vendas:
+            precos_vendas.setdefault(p['cat'], set()).add(p['preco'])
+        precos_bonus = {}
+        for p in bonus:
+            precos_bonus.setdefault(p['cat'], set()).add(p['preco'])
+
+        result['conciliacao_info'] = {
+            'total_vendas': len(vendas),
+            'total_bonus':  len(bonus),
+            'categorias_vendas': {k: len(v) for k, v in precos_vendas.items()},
+        }
 
         return jsonify({'success': True, 'data': result})
     except Exception as e:
