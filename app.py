@@ -31,7 +31,7 @@ def get_sheets_service():
     return build('sheets', 'v4', credentials=creds)
 
 # ---------------------------------------------------------------------------
-# Mapeamento YUZER -> Planilha
+# Constantes de mapeamento
 # ---------------------------------------------------------------------------
 
 MAPA_SUBCAT = {
@@ -45,6 +45,7 @@ MAPA_SUBCAT = {
     'OUTROS':                  'DOSES & OUTROS',
 }
 
+# Linha inicial no CADASTRO por categoria
 CAT_INICIO = {
     'BEBIDAS NAO ALCOOLICAS': 16,
     'BEBIDAS ALCOOLICAS':     32,
@@ -63,33 +64,39 @@ CAT_MAX = {
     'DOSES & OUTROS':         8,
 }
 
+# CADASTRO linha X -> ESTOQUE / RELATORIO / PRODUCAO linha (X - 10)
 OFFSET = -10
 
 # ---------------------------------------------------------------------------
-# Parsers
+# Parsers YUZER
 # ---------------------------------------------------------------------------
 
 def parse_produtos_xlsx(file_bytes):
+    """Parseia arquivo de produtos vendidos XLSX exportado do YUZER."""
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     ws = wb.active
     produtos = []
     header_row = None
-    for i, row in enumerate(ws.iter_rows(values_only=True), 1):
+    for row in ws.iter_rows(values_only=True):
         if row[0] == 'Produto':
-            header_row = i
+            header_row = True
             continue
         if header_row and row[0] is not None:
+            subcat = str(row[3]).strip().upper() if row[3] else ''
+            cat = MAPA_SUBCAT.get(subcat, 'DOSES & OUTROS')
             produtos.append({
                 'produto':      str(row[0]).strip(),
-                'subcategoria': str(row[3]).strip() if row[3] else '',
+                'subcategoria': subcat,
+                'cat':          cat,
                 'qtd_vendida':  int(row[5] or 0),
-                'preco':        float(row[8] or 0),
-                'total_vendido': float(row[10] or 0),
+                'preco':        round(float(row[8] or 0), 2),
+                'total_vendido': round(float(row[10] or 0), 2),
             })
     return produtos
 
 
 def parse_bonus_pdf(file_bytes):
+    """Parseia PDF de bonus/cortesia do YUZER."""
     produtos = []
 
     def normalizar_subcat(s):
@@ -111,28 +118,32 @@ def parse_bonus_pdf(file_bytes):
                     if nome_cell == 'NOME':
                         continue
 
-                    # Linha normal
+                    # Linha normal: colunas separadas corretamente
                     if row[1] is not None and row[5] is not None:
                         try:
                             qtd = int(str(row[5]).strip())
                             if qtd <= 0:
                                 continue
                             subcat_raw = (row[3] or '').replace('\n', ' ')
+                            subcat = normalizar_subcat(subcat_raw)
                             preco_str = str(row[8] or '0').replace('R$','').replace('\xa0','').replace('.','').replace(',','.').strip()
-                            preco = float(preco_str) if preco_str else 0
+                            preco = round(float(preco_str), 2) if preco_str else 0
+                            cat = MAPA_SUBCAT.get(subcat, MAPA_SUBCAT.get(subcat.upper(), 'DOSES & OUTROS'))
                             produtos.append({
                                 'produto':      nome_cell,
-                                'subcategoria': normalizar_subcat(subcat_raw),
+                                'subcategoria': subcat,
+                                'cat':          cat,
                                 'qtd_vendida':  qtd,
                                 'preco':        preco,
                             })
                         except Exception:
                             pass
 
-                    # Linha colada com \n
+                    # Linha colada com \n: "SUBCATEGORIA\nNOME FINAL ..."
                     elif row[1] is None and '\n' in nome_cell:
                         lines = nome_cell.split('\n')
-                        subcat_linha = normalizar_subcat(lines[0])
+                        subcat = normalizar_subcat(lines[0])
+                        cat = MAPA_SUBCAT.get(subcat, 'DOSES & OUTROS')
                         for part in lines[1:]:
                             part = part.strip()
                             m = re.match(
@@ -146,12 +157,13 @@ def parse_bonus_pdf(file_bytes):
                                 preco_str = m.group(3).replace('.','').replace(',','.')
                                 produtos.append({
                                     'produto':      m.group(1).strip(),
-                                    'subcategoria': subcat_linha,
+                                    'subcategoria': subcat,
+                                    'cat':          cat,
                                     'qtd_vendida':  qtd,
-                                    'preco':        float(preco_str),
+                                    'preco':        round(float(preco_str), 2),
                                 })
 
-                    # Linha totalmente colada sem \n
+                    # Linha totalmente colada sem \n mas com FINAL
                     elif row[1] is None and 'FINAL' in nome_cell:
                         m = re.match(
                             r'^(.+?)\s+FINAL\s+\S+\s+(\S+)\s+\S+\s+(\d+)\s+\d+\s+\d+\s+R\$\s*([\d.,]+)',
@@ -161,123 +173,194 @@ def parse_bonus_pdf(file_bytes):
                             qtd = int(m.group(3))
                             if qtd <= 0:
                                 continue
+                            subcat = normalizar_subcat(m.group(2))
                             preco_str = m.group(4).replace('.','').replace(',','.')
+                            cat = MAPA_SUBCAT.get(subcat, 'DOSES & OUTROS')
                             produtos.append({
                                 'produto':      m.group(1).strip(),
-                                'subcategoria': normalizar_subcat(m.group(2)),
+                                'subcategoria': subcat,
+                                'cat':          cat,
                                 'qtd_vendida':  qtd,
-                                'preco':        float(preco_str),
+                                'preco':        round(float(preco_str), 2),
                             })
 
     return produtos
 
 
 def parse_caixas(file_bytes):
+    """Parseia exportacao_caixas XLSX do YUZER."""
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     ws = wb.active
     caixas = []
     header_row = None
-    for i, row in enumerate(ws.iter_rows(values_only=True), 1):
+    for row in ws.iter_rows(values_only=True):
         if row[0] == 'Id':
-            header_row = i
+            header_row = True
             continue
         if header_row and row[0] is not None:
             caixas.append({
                 'usuario':  row[1],
                 'serial':   row[3],
-                'total':    row[6] or 0,
-                'credito':  row[12] or 0,
-                'debito':   row[13] or 0,
-                'pix':      row[14] or 0,
-                'dinheiro': row[15] or 0,
+                'total':    round(float(row[6] or 0), 2),
+                'credito':  round(float(row[12] or 0), 2),
+                'debito':   round(float(row[13] or 0), 2),
+                'pix':      round(float(row[14] or 0), 2),
+                'dinheiro': round(float(row[15] or 0), 2),
             })
     return caixas
 
 
 def parse_painel_vendas(file_bytes):
+    """Parseia exportacao_painel_de_vendas XLSX do YUZER."""
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     ws = wb.active
     painel = {}
     formas_pagamento = {}
     reading_pagamentos = False
+    passou_operacoes = False
+
     for row in ws.iter_rows(values_only=True):
         if row[0] is None:
             continue
         key = str(row[0]).strip()
         val = row[1] if len(row) > 1 else None
+
         if key == 'Formas de Pagamento':
             reading_pagamentos = True
             continue
+
         if key in ('Operacoes', 'Operações'):
             reading_pagamentos = False
+            passou_operacoes = True
             continue
+
+        # Formas de pagamento (entre 'Formas de Pagamento' e 'Operações')
         if reading_pagamentos and val is not None:
             formas_pagamento[key] = val
-        elif key in ('Total', 'Pedidos', 'Media', 'Média'):
-            painel[key] = val
+            continue
+
+        # Totais gerais — só antes de 'Operações' para evitar subtotais por operador
+        if not passou_operacoes and key in ('Total', 'Pedidos', 'Media', 'Média', 'Ticket'):
+            if key not in painel:
+                painel[key] = val
+
     painel['formas_pagamento'] = formas_pagamento
     return painel
 
 # ---------------------------------------------------------------------------
-# Leitura do CADASTRO da planilha (fonte de verdade dos nomes)
+# Leitura do CADASTRO da planilha (nome + preço por categoria)
 # ---------------------------------------------------------------------------
 
 def ler_cadastro_planilha(service, spreadsheet_id):
-    catalogo = {}
+    """
+    Lê nome (col B) e preço (col F) de cada produto cadastrado na planilha.
+    Retorna lista por categoria ordenada por posição (linha_cadastro).
+    Estrutura: {cat: [{nome, preco, linha_cadastro}, ...]}
+    """
+    catalogo = {cat: [] for cat in CAT_INICIO}
+
     for cat, inicio in CAT_INICIO.items():
         fim = inicio + CAT_MAX[cat] - 1
         result = service.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
-            range=f"CADASTRO!B{inicio}:B{fim}"
+            range=f"CADASTRO!B{inicio}:F{fim}"
         ).execute()
         valores = result.get('values', [])
         for i, row in enumerate(valores):
-            if row and row[0] and str(row[0]).strip():
-                nome = str(row[0]).strip()
-                catalogo[nome.upper()] = {
-                    'nome_original': nome,
-                    'cat': cat,
-                    'linha_cadastro': inicio + i,
-                }
+            nome = str(row[0]).strip() if len(row) > 0 and row[0] else ''
+            # Preço está na col F = índice 4 do range B:F
+            preco_raw = row[4] if len(row) > 4 else ''
+            if not nome:
+                continue
+            try:
+                preco = round(float(str(preco_raw).replace('R$','').replace('.','').replace(',','.').strip()), 2)
+            except Exception:
+                preco = 0.0
+            catalogo[cat].append({
+                'nome':           nome,
+                'preco':          preco,
+                'linha_cadastro': inicio + i,
+            })
+
     return catalogo
 
 # ---------------------------------------------------------------------------
-# Merge usando catálogo da planilha como referência
+# Conciliação por PREÇO + POSIÇÃO
 # ---------------------------------------------------------------------------
 
-def merge_com_catalogo(vendas, bonus, catalogo):
-    vendas_map = {(p['produto'] or '').strip().upper(): p for p in vendas}
-    bonus_map  = {(p['produto'] or '').strip().upper(): p for p in bonus}
-
+def conciliar_por_preco(catalogo, vendas, bonus):
+    """
+    Para cada categoria:
+      1. Pega os produtos do CADASTRO (ordenados por posição = linha_cadastro)
+      2. Pega os produtos do YUZER filtrados pela categoria
+      3. Agrupa os do YUZER por preço
+      4. Para cada item do CADASTRO, busca no YUZER pelo preço
+         — se houver mais de um com o mesmo preço, usa a posição relativa
+           (1º produto do CADASTRO com preço X = 1º produto do YUZER com preço X)
+      5. Retorna agrupado com qtd_vendida_pura, qtd_bonus, qtd_sistema
+    """
     agrupado = {cat: [] for cat in CAT_INICIO}
-    por_cat = {cat: [] for cat in CAT_INICIO}
 
-    for nome_norm, info in catalogo.items():
-        por_cat[info['cat']].append((info['linha_cadastro'], nome_norm, info['nome_original']))
+    for cat, itens_cadastro in catalogo.items():
+        # Filtrar vendas e bonus pela categoria
+        vendas_cat = [p for p in vendas if p.get('cat') == cat]
+        bonus_cat  = [p for p in bonus  if p.get('cat') == cat]
 
-    for cat in CAT_INICIO:
-        itens = sorted(por_cat[cat], key=lambda x: x[0])
-        for linha, nome_norm, nome_orig in itens:
-            v = vendas_map.get(nome_norm)
-            b = bonus_map.get(nome_norm)
+        # Agrupar YUZER por preço, mantendo ordem de aparição (posição)
+        def agrupar_por_preco(lista):
+            grupos = {}  # preco -> [produto, ...]
+            for p in lista:
+                preco = p['preco']
+                if preco not in grupos:
+                    grupos[preco] = []
+                grupos[preco].append(p)
+            return grupos
+
+        vendas_por_preco = agrupar_por_preco(vendas_cat)
+        bonus_por_preco  = agrupar_por_preco(bonus_cat)
+
+        # Contador de posição usada por preço (para desempate)
+        pos_vendas = {}
+        pos_bonus  = {}
+
+        for item in itens_cadastro:
+            preco = item['preco']
+            linha = item['linha_cadastro']
+
+            # Buscar venda correspondente (preço + posição)
+            idx_v = pos_vendas.get(preco, 0)
+            lista_v = vendas_por_preco.get(preco, [])
+            v = lista_v[idx_v] if idx_v < len(lista_v) else None
+            if v:
+                pos_vendas[preco] = idx_v + 1
+
+            # Buscar bonus correspondente (preço + posição)
+            idx_b = pos_bonus.get(preco, 0)
+            lista_b = bonus_por_preco.get(preco, [])
+            b = lista_b[idx_b] if idx_b < len(lista_b) else None
+            if b:
+                pos_bonus[preco] = idx_b + 1
+
             qtd_venda = v['qtd_vendida'] if v else 0
             qtd_bon   = b['qtd_vendida'] if b else 0
+
             agrupado[cat].append({
-                'produto':          nome_orig,
+                'nome':             item['nome'],
                 'linha_cadastro':   linha,
+                'preco':            preco,
                 'qtd_vendida_pura': qtd_venda,
                 'qtd_bonus':        qtd_bon,
                 'qtd_sistema':      qtd_venda + qtd_bon,
-                'preco':            v['preco'] if v else (b['preco'] if b else 0),
             })
 
     return agrupado
 
 # ---------------------------------------------------------------------------
-# Builders de update
+# Builders de update para Google Sheets
 # ---------------------------------------------------------------------------
 
 def build_estoque_updates(agrupado):
+    """ESTOQUE col I = qtd_sistema (vendas + bonus = Consumo Sistema)."""
     updates = []
     for cat, prods in agrupado.items():
         for p in prods:
@@ -290,6 +373,7 @@ def build_estoque_updates(agrupado):
 
 
 def build_relatorio_updates(agrupado):
+    """RELATORIO DE VENDA col B = apenas vendas (sem bonus)."""
     updates = []
     for cat, prods in agrupado.items():
         for p in prods:
@@ -302,6 +386,7 @@ def build_relatorio_updates(agrupado):
 
 
 def build_producao_updates(agrupado):
+    """PRODUCAO col C (Cartao 1) = qtd_bonus por produto."""
     updates = []
     for cat, prods in agrupado.items():
         for p in prods:
@@ -385,23 +470,32 @@ def enviar():
                 else:
                     bonus = parse_produtos_xlsx(bonus_bytes)
 
-            # Lê nomes da planilha como referência
+            # Lê CADASTRO da planilha (nome + preço + posição)
             catalogo = ler_cadastro_planilha(service, spreadsheet_id)
-            descriptions.append(f'CADASTRO: {len(catalogo)} produtos lidos da planilha como referencia')
+            total_cadastro = sum(len(v) for v in catalogo.values())
+            descriptions.append(f'CADASTRO: {total_cadastro} produtos lidos da planilha')
 
-            agrupado = merge_com_catalogo(vendas, bonus, catalogo)
+            # Concilia por preço + posição
+            agrupado = conciliar_por_preco(catalogo, vendas, bonus)
 
+            # ESTOQUE col I = vendas + bonus
             for u in build_estoque_updates(agrupado):
                 batch_data.append({'range': u['range'], 'values': u['values']})
             descriptions.append('ESTOQUE: col I (Consumo Sistema = vendas + bonus) preenchida')
 
+            # RELATORIO DE VENDA col B = apenas vendas
             for u in build_relatorio_updates(agrupado):
                 batch_data.append({'range': u['range'], 'values': u['values']})
-            descriptions.append('RELATORIO DE VENDA: col B preenchida com vendas por produto')
+            descriptions.append('RELATORIO DE VENDA: col B preenchida com vendas')
 
-            for u in build_producao_updates(agrupado):
+            # PRODUCAO col C = bonus
+            prod_updates = build_producao_updates(agrupado)
+            for u in prod_updates:
                 batch_data.append({'range': u['range'], 'values': u['values']})
-            descriptions.append('PRODUCAO: col C (Cartao 1) preenchida com cortesia/bonus')
+            if prod_updates:
+                descriptions.append(f'PRODUCAO: col C preenchida com {len(prod_updates)} produtos com bonus/cortesia')
+            else:
+                descriptions.append('PRODUCAO: nenhum bonus/cortesia encontrado')
 
         # --- Caixas ---
         if 'exportacao_caixas' in request.files:
@@ -423,11 +517,11 @@ def enviar():
             batch_data.append({
                 'range': 'RESUMO!B3:B7',
                 'values': [
-                    [0],
-                    [fp.get('CASH', 0)],
-                    [fp.get('CREDIT_CARD', 0)],
-                    [fp.get('DEBIT_CARD', 0)],
-                    [fp.get('PIX', 0)],
+                    [0],                          # B3 = APP (sempre 0)
+                    [fp.get('CASH', 0)],          # B4 = Dinheiro
+                    [fp.get('CREDIT_CARD', 0)],   # B5 = Crédito
+                    [fp.get('DEBIT_CARD', 0)],    # B6 = Débito
+                    [fp.get('PIX', 0)],           # B7 = PIX
                 ],
             })
             descriptions.append('RESUMO: totais por forma de pagamento preenchidos')
@@ -451,7 +545,7 @@ def enviar():
 
 @app.route('/api/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'app': 'Prime Bar - YUZER Integration v2'})
+    return jsonify({'status': 'ok', 'app': 'Prime Bar - YUZER Integration v3'})
 
 
 if __name__ == '__main__':
