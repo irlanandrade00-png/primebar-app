@@ -45,6 +45,7 @@ MAPA_SUBCAT = {
     'OUTROS':                  'DOSES & OUTROS',
 }
 
+# Categorias e linha inicial no CADASTRO
 CAT_INICIO = {
     'BEBIDAS NAO ALCOOLICAS': 16,
     'BEBIDAS ALCOOLICAS':     32,
@@ -63,7 +64,15 @@ CAT_MAX = {
     'DOSES & OUTROS':         8,
 }
 
-OFFSET = -10  # CADASTRO linha X -> ESTOQUE/RELATORIO/PRODUCAO linha (X - 10)
+# Cabeçalhos/categorias a ignorar ao ler nomes de produtos nas abas
+IGNORAR_NOMES = {
+    'PRODUTO', 'BEBIDAS NÃO ALCOOLICAS', 'BEBIDAS ALCOOLICAS',
+    'DESTILADOS', 'COMBOS', 'DRINK', 'DOSES & OUTROS',
+    'FECHAMENTO GERAL BAR CONSUMO/VENDA',
+    'OBSERVAÇÃO PREENCHER APENAS AS COLUNAS EM AMARELO',
+    'CONSUMO PRODUÇÃO CAMARIM / BONUS',
+    'RESUMO ALIMENTAÇAO', 'TOTAL / CARTÃO', 'TOTAL',
+}
 
 # ---------------------------------------------------------------------------
 # Parser: Produtos Vendidos XLSX (Arquivo 1)
@@ -92,17 +101,14 @@ def parse_produtos_xlsx(file_bytes):
 
 # ---------------------------------------------------------------------------
 # Parser: Bônus/Cortesia PDF (Arquivo 4)
-# Três tipos de linha no PDF:
-#   TIPO A — linha normal: row[1] não é None, row[5] tem qtd
-#   TIPO B — linha colada com \n: "SUBCATEGORIA\nNOME FINAL ... qtd ..."
-#   TIPO C — linha totalmente colada sem \n: "NOME FINAL ... qtd ..."
 # ---------------------------------------------------------------------------
 
 def _preco_str(s):
-    return round(float(str(s or '0').replace('R$','').replace('\xa0','').replace(' ','').replace('.','').replace(',','.')), 2)
+    return round(float(str(s or '0').replace('R$','').replace('\xa0','')
+                       .replace(' ','').replace('.','').replace(',','.')), 2)
 
 def _normalizar_subcat(s):
-    s = str(s).strip().upper().replace('\n',' ')
+    s = str(s).strip().upper().replace('\n', ' ')
     if 'NÃO' in s or 'NAO' in s:
         return 'BEBIDAS NÃO ALCOOLICAS'
     if s in ('BEBIDAS', 'BEBIDAS ALCOOLICAS'):
@@ -111,7 +117,6 @@ def _normalizar_subcat(s):
 
 def parse_bonus_pdf(file_bytes):
     produtos = []
-
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         for page in pdf.pages:
             for table in (page.extract_tables() or []):
@@ -119,15 +124,12 @@ def parse_bonus_pdf(file_bytes):
                     if not row or not row[0]:
                         continue
                     cell0 = str(row[0]).strip()
-
-                    # Pular cabeçalho e linha de total
                     if cell0 == 'NOME' or not cell0:
                         continue
-                    # Pular linha de total (nome vazio ou só números)
                     if re.match(r'^[\d\s]+$', cell0):
                         continue
 
-                    # TIPO A — linha normal (colunas separadas)
+                    # TIPO A — linha normal
                     if row[1] is not None and row[5] is not None:
                         try:
                             qtd = int(str(row[5]).strip())
@@ -137,7 +139,6 @@ def parse_bonus_pdf(file_bytes):
                             cat = MAPA_SUBCAT.get(subcat, 'DOSES & OUTROS')
                             produtos.append({
                                 'produto':     cell0,
-                                'subcategoria': subcat,
                                 'cat':         cat,
                                 'qtd_vendida': qtd,
                                 'preco':       _preco_str(row[8]),
@@ -145,30 +146,27 @@ def parse_bonus_pdf(file_bytes):
                         except Exception:
                             pass
 
-                    # TIPO B — linha colada com \n
+                    # TIPO B — colada com \n
                     elif row[1] is None and '\n' in cell0:
                         lines = cell0.split('\n')
                         subcat = _normalizar_subcat(lines[0])
                         cat = MAPA_SUBCAT.get(subcat, 'DOSES & OUTROS')
                         for part in lines[1:]:
-                            part = part.strip()
                             m = re.match(
                                 r'^(.+?)\s+FINAL\s+\S+\s+.+?\s+(\d+)\s+\d+\s+\d+\s+R\$\s*([\d.,]+)',
-                                part
+                                part.strip()
                             )
                             if m:
                                 qtd = int(m.group(2))
-                                if qtd <= 0:
-                                    continue
-                                produtos.append({
-                                    'produto':     m.group(1).strip(),
-                                    'subcategoria': subcat,
-                                    'cat':         cat,
-                                    'qtd_vendida': qtd,
-                                    'preco':       round(float(m.group(3).replace('.','').replace(',','.')), 2),
-                                })
+                                if qtd > 0:
+                                    produtos.append({
+                                        'produto':     m.group(1).strip(),
+                                        'cat':         cat,
+                                        'qtd_vendida': qtd,
+                                        'preco':       round(float(m.group(3).replace('.','').replace(',','.')), 2),
+                                    })
 
-                    # TIPO C — linha totalmente colada sem \n
+                    # TIPO C — totalmente colada sem \n
                     elif row[1] is None and 'FINAL' in cell0:
                         m = re.match(
                             r'^(.+?)\s+FINAL\s+\S+\s+(\S+)\s+\S+\s+(\d+)\s+\d+\s+\d+\s+R\$\s*([\d.,]+)',
@@ -176,18 +174,15 @@ def parse_bonus_pdf(file_bytes):
                         )
                         if m:
                             qtd = int(m.group(3))
-                            if qtd <= 0:
-                                continue
-                            subcat = _normalizar_subcat(m.group(2))
-                            cat = MAPA_SUBCAT.get(subcat, 'DOSES & OUTROS')
-                            produtos.append({
-                                'produto':     m.group(1).strip(),
-                                'subcategoria': subcat,
-                                'cat':         cat,
-                                'qtd_vendida': qtd,
-                                'preco':       round(float(m.group(4).replace('.','').replace(',','.')), 2),
-                            })
-
+                            if qtd > 0:
+                                subcat = _normalizar_subcat(m.group(2))
+                                cat = MAPA_SUBCAT.get(subcat, 'DOSES & OUTROS')
+                                produtos.append({
+                                    'produto':     m.group(1).strip(),
+                                    'cat':         cat,
+                                    'qtd_vendida': qtd,
+                                    'preco':       round(float(m.group(4).replace('.','').replace(',','.')), 2),
+                                })
     return produtos
 
 # ---------------------------------------------------------------------------
@@ -251,13 +246,13 @@ def parse_painel_vendas(file_bytes):
     return painel
 
 # ---------------------------------------------------------------------------
-# Leitura do CADASTRO da planilha (nome + preço por categoria)
+# Leitura do CADASTRO da planilha Google (nome + preço por categoria)
 # ---------------------------------------------------------------------------
 
 def ler_cadastro(service, spreadsheet_id):
     """
     Retorna: {cat: [{nome, preco, linha_cadastro}, ...]}
-    Lê coluna B (nome) e F (preço) de cada categoria.
+    Lê CADASTRO col B (nome) e F (preço) para cada categoria.
     """
     catalogo = {cat: [] for cat in CAT_INICIO}
     for cat, inicio in CAT_INICIO.items():
@@ -271,8 +266,10 @@ def ler_cadastro(service, spreadsheet_id):
             if not nome:
                 continue
             try:
-                preco = round(float(str(row[4] if len(row) > 4 else 0)
-                    .replace('R$','').replace('.','').replace(',','.').strip()), 2)
+                preco = round(float(
+                    str(row[4] if len(row) > 4 else 0)
+                    .replace('R$','').replace('.','').replace(',','.').strip()
+                ), 2)
             except Exception:
                 preco = 0.0
             catalogo[cat].append({
@@ -283,10 +280,39 @@ def ler_cadastro(service, spreadsheet_id):
     return catalogo
 
 # ---------------------------------------------------------------------------
+# Leitura do mapa de linhas: ESTOQUE e PRODUCAO (col A -> linha)
+# ---------------------------------------------------------------------------
+
+def ler_mapa_linhas(service, spreadsheet_id):
+    """
+    Lê col A das abas ESTOQUE e PRODUÇÃO e retorna
+    dicionários nome_produto -> linha, para uso no batchUpdate.
+    """
+    est_map = {}
+    prod_map = {}
+
+    # ESTOQUE col A (linhas 1-80)
+    r = service.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range="ESTOQUE!A1:A80"
+    ).execute()
+    for i, row in enumerate(r.get('values', []), 1):
+        if row and row[0] and str(row[0]).strip() not in IGNORAR_NOMES:
+            est_map[str(row[0]).strip()] = i
+
+    # PRODUÇÃO col A (linhas 1-80)
+    r = service.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range="PRODUÇÃO!A1:A80"
+    ).execute()
+    for i, row in enumerate(r.get('values', []), 1):
+        if row and row[0] and str(row[0]).strip() not in IGNORAR_NOMES:
+            prod_map[str(row[0]).strip()] = i
+
+    return est_map, prod_map
+
+# ---------------------------------------------------------------------------
 # Conciliação por PREÇO + POSIÇÃO
-# Para cada produto do CADASTRO, busca no YUZER pelo preço.
-# Se dois produtos têm o mesmo preço na mesma categoria,
-# usa a posição relativa como desempate.
 # ---------------------------------------------------------------------------
 
 def conciliar(catalogo, vendas, bonus):
@@ -297,11 +323,9 @@ def conciliar(catalogo, vendas, bonus):
     agrupado = {cat: [] for cat in CAT_INICIO}
 
     for cat, itens in catalogo.items():
-        # Filtrar YUZER pela categoria
         v_cat = [p for p in vendas if p['cat'] == cat]
         b_cat = [p for p in bonus  if p['cat'] == cat]
 
-        # Agrupar por preço mantendo ordem de aparição
         def por_preco(lista):
             d = {}
             for p in lista:
@@ -310,20 +334,18 @@ def conciliar(catalogo, vendas, bonus):
 
         v_map = por_preco(v_cat)
         b_map = por_preco(b_cat)
-        v_pos = {}  # preco -> próximo índice a usar
+        v_pos = {}
         b_pos = {}
 
         for item in itens:
             preco = item['preco']
 
-            # Vendas
             vi = v_pos.get(preco, 0)
             vl = v_map.get(preco, [])
             v = vl[vi] if vi < len(vl) else None
             if v:
                 v_pos[preco] = vi + 1
 
-            # Bonus
             bi = b_pos.get(preco, 0)
             bl = b_map.get(preco, [])
             b = bl[bi] if bi < len(bl) else None
@@ -345,27 +367,41 @@ def conciliar(catalogo, vendas, bonus):
     return agrupado
 
 # ---------------------------------------------------------------------------
-# Builders Google Sheets
+# Builders Google Sheets — usando mapa de linhas real das abas
 # ---------------------------------------------------------------------------
 
-def build_estoque_updates(agrupado):
-    """ESTOQUE col I = qtd_venda + qtd_bonus (Consumo Sistema)"""
+def build_estoque_updates(agrupado, est_map):
+    """ESTOQUE col I = qtd_sistema (vendas + bonus)"""
     updates = []
+    nao_encontrados = []
     for prods in agrupado.values():
         for p in prods:
-            linha = p['linha_cadastro'] + OFFSET
-            updates.append({'range': f"ESTOQUE!I{linha}", 'values': [[p['qtd_sistema']]]})
-    return updates
+            linha = est_map.get(p['nome'])
+            if linha:
+                updates.append({
+                    'range':  f"ESTOQUE!I{linha}",
+                    'values': [[p['qtd_sistema']]]
+                })
+            else:
+                nao_encontrados.append(p['nome'])
+    return updates, nao_encontrados
 
-def build_producao_updates(agrupado):
-    """PRODUCAO col C = qtd_bonus (somente onde bonus > 0)"""
+def build_producao_updates(agrupado, prod_map):
+    """PRODUÇÃO col C = qtd_bonus (só onde bonus > 0)"""
     updates = []
+    nao_encontrados = []
     for prods in agrupado.values():
         for p in prods:
             if p['qtd_bonus'] > 0:
-                linha = p['linha_cadastro'] + OFFSET
-                updates.append({'range': f"PRODUCAO!C{linha}", 'values': [[p['qtd_bonus']]]})
-    return updates
+                linha = prod_map.get(p['nome'])
+                if linha:
+                    updates.append({
+                        'range':  f"PRODUÇÃO!C{linha}",
+                        'values': [[p['qtd_bonus']]]
+                    })
+                else:
+                    nao_encontrados.append(p['nome'])
+    return updates, nao_encontrados
 
 # ---------------------------------------------------------------------------
 # Rotas
@@ -382,7 +418,9 @@ def preview():
         if 'produtos_bonus' in request.files:
             b_bytes = request.files['produtos_bonus'].read()
             fname = request.files['produtos_bonus'].filename or ''
-            result['bonus'] = parse_bonus_pdf(b_bytes) if fname.lower().endswith('.pdf') else parse_produtos_xlsx(b_bytes)
+            result['bonus'] = (parse_bonus_pdf(b_bytes)
+                               if fname.lower().endswith('.pdf')
+                               else parse_produtos_xlsx(b_bytes))
 
         if 'exportacao_caixas' in request.files:
             result['caixas'] = parse_caixas(request.files['exportacao_caixas'].read())
@@ -390,21 +428,22 @@ def preview():
         if 'painel_de_vendas' in request.files:
             painel = parse_painel_vendas(request.files['painel_de_vendas'].read())
             fp = painel.get('formas_pagamento', {})
-            result['painel']  = painel
+            result['painel'] = painel
             result['resumo'] = {
                 'total_faturado': painel.get('Total', 0),
                 'total_pedidos':  painel.get('Pedidos', 0),
                 'ticket_medio':   painel.get('Média', painel.get('Media', 0)),
-                'credito':  fp.get('CREDIT_CARD', 0),
-                'debito':   fp.get('DEBIT_CARD', 0),
-                'pix':      fp.get('PIX', 0),
-                'dinheiro': fp.get('CASH', 0),
+                'credito':        fp.get('CREDIT_CARD', 0),
+                'debito':         fp.get('DEBIT_CARD', 0),
+                'pix':            fp.get('PIX', 0),
+                'dinheiro':       fp.get('CASH', 0),
             }
 
         return jsonify({'success': True, 'data': result})
     except Exception as e:
         import traceback
-        return jsonify({'success': False, 'error': str(e), 'trace': traceback.format_exc()}), 400
+        return jsonify({'success': False, 'error': str(e),
+                        'trace': traceback.format_exc()}), 400
 
 
 @app.route('/api/enviar', methods=['POST'])
@@ -419,8 +458,9 @@ def enviar():
                 spreadsheet_id = m.group(1)
 
         service = get_sheets_service()
-        batch   = []
-        msgs    = []
+        batch = []
+        msgs  = []
+        avisos = []
 
         # ---- Produtos vendidos + bônus ----
         if 'produtos_vendidos' in request.files:
@@ -430,30 +470,47 @@ def enviar():
             if 'produtos_bonus' in request.files:
                 b_bytes = request.files['produtos_bonus'].read()
                 fname   = request.files['produtos_bonus'].filename or ''
-                bonus   = parse_bonus_pdf(b_bytes) if fname.lower().endswith('.pdf') else parse_produtos_xlsx(b_bytes)
+                bonus   = (parse_bonus_pdf(b_bytes)
+                           if fname.lower().endswith('.pdf')
+                           else parse_produtos_xlsx(b_bytes))
 
+            # Ler catálogo do CADASTRO
             catalogo = ler_cadastro(service, spreadsheet_id)
             total_cat = sum(len(v) for v in catalogo.values())
-            msgs.append(f'CADASTRO: {total_cat} produtos lidos da planilha')
+            msgs.append(f'CADASTRO: {total_cat} produtos lidos')
 
+            # Ler mapas de linhas reais do ESTOQUE e PRODUÇÃO
+            est_map, prod_map = ler_mapa_linhas(service, spreadsheet_id)
+            msgs.append(f'ESTOQUE: {len(est_map)} produtos mapeados')
+            msgs.append(f'PRODUÇÃO: {len(prod_map)} produtos mapeados')
+
+            # Conciliar por preço + posição
             agrupado = conciliar(catalogo, vendas, bonus)
 
-            # ESTOQUE col I = vendas + bonus
-            est = build_estoque_updates(agrupado)
-            batch.extend({'range': u['range'], 'values': u['values']} for u in est)
-            msgs.append(f'ESTOQUE col I: {len(est)} produtos preenchidos (vendas + bonus)')
+            # ESTOQUE col I
+            est_updates, est_nf = build_estoque_updates(agrupado, est_map)
+            batch.extend(est_updates)
+            msgs.append(f'ESTOQUE col I: {len(est_updates)} produtos preenchidos (vendas + bônus)')
+            if est_nf:
+                avisos.append(f'ESTOQUE não encontrados: {est_nf}')
 
-            # PRODUCAO col C = bonus
-            prod = build_producao_updates(agrupado)
-            batch.extend({'range': u['range'], 'values': u['values']} for u in prod)
-            msgs.append(f'PRODUCAO col C: {len(prod)} produtos com bonus/cortesia preenchidos')
+            # PRODUÇÃO col C
+            prod_updates, prod_nf = build_producao_updates(agrupado, prod_map)
+            batch.extend(prod_updates)
+            msgs.append(f'PRODUÇÃO col C: {len(prod_updates)} produtos com bônus/cortesia preenchidos')
+            if prod_nf:
+                avisos.append(f'PRODUÇÃO não encontrados: {prod_nf}')
 
         # ---- Caixas ----
         if 'exportacao_caixas' in request.files:
             caixas = parse_caixas(request.files['exportacao_caixas'].read())
             rows = [[c['usuario'], c['serial'], c['total'],
-                     c['dinheiro'], c['pix'], c['debito'], c['credito']] for c in caixas]
-            batch.append({'range': f"FECHAMENTO CAIXAS!B3:H{2+len(rows)}", 'values': rows})
+                     c['dinheiro'], c['pix'], c['debito'], c['credito']]
+                    for c in caixas]
+            batch.append({
+                'range':  f"FECHAMENTO CAIXAS!B3:H{2 + len(rows)}",
+                'values': rows,
+            })
             msgs.append(f'FECHAMENTO CAIXAS: {len(rows)} operadores preenchidos')
 
         # ---- Painel → RESUMO ----
@@ -463,28 +520,33 @@ def enviar():
             batch.append({
                 'range': 'RESUMO!B3:B7',
                 'values': [
-                    [0],                        # B3 APP
-                    [fp.get('CASH', 0)],        # B4 Dinheiro
-                    [fp.get('CREDIT_CARD', 0)], # B5 Crédito
-                    [fp.get('DEBIT_CARD', 0)],  # B6 Débito
-                    [fp.get('PIX', 0)],         # B7 PIX
+                    [0],
+                    [fp.get('CASH', 0)],
+                    [fp.get('CREDIT_CARD', 0)],
+                    [fp.get('DEBIT_CARD', 0)],
+                    [fp.get('PIX', 0)],
                 ],
             })
             msgs.append('RESUMO: formas de pagamento preenchidas')
 
+        # ---- Enviar tudo de uma vez ----
         if batch:
             service.spreadsheets().values().batchUpdate(
                 spreadsheetId=spreadsheet_id,
                 body={'valueInputOption': 'USER_ENTERED', 'data': batch}
             ).execute()
 
-        return jsonify({'success': True,
-                        'message': 'Dados enviados com sucesso!',
-                        'detalhes': msgs})
+        return jsonify({
+            'success':  True,
+            'message':  'Dados enviados com sucesso!',
+            'detalhes': msgs,
+            'avisos':   avisos,
+        })
 
     except Exception as e:
         import traceback
-        return jsonify({'success': False, 'error': str(e), 'trace': traceback.format_exc()}), 400
+        return jsonify({'success': False, 'error': str(e),
+                        'trace': traceback.format_exc()}), 400
 
 
 @app.route('/api/health')
