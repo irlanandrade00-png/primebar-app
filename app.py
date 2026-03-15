@@ -8,6 +8,8 @@ from googleapiclient.discovery import build
 import io
 import re
 import pdfplumber
+import difflib
+import unicodedata
 
 app = Flask(__name__, static_folder='static')
 CORS(app)
@@ -312,13 +314,69 @@ def ler_mapa_linhas(service, spreadsheet_id):
     return est_map, prod_map
 
 # ---------------------------------------------------------------------------
-# Conciliação por PREÇO + POSIÇÃO
+# Utilitários de similaridade de nome
 # ---------------------------------------------------------------------------
+
+# Palavras irrelevantes para comparação (unidades, tamanhos, etc.)
+STOP_WORDS = {
+    'ml', 'l', 'lt', 'kg', 'g', 'un', 'und', 'cx', 'cx.',
+    '250', '269', '330', '350', '355', '473', '500', '600',
+    '750', '1l', '1lt', '1000',
+    'com', 'de', 'do', 'da', 'e', 'em', 'para', 'o', 'a',
+    'garrafa', 'lata', 'long', 'neck',
+}
+
+def _normalizar(nome):
+    """Remove acentos, lowercase, elimina stop words e pontuação."""
+    # Remove acentos
+    nome = unicodedata.normalize('NFKD', nome)
+    nome = ''.join(c for c in nome if not unicodedata.combining(c))
+    # Lowercase e remover pontuação
+    nome = re.sub(r'[^a-z0-9 ]', ' ', nome.lower())
+    # Tokens sem stop words
+    tokens = [t for t in nome.split() if t not in STOP_WORDS and len(t) > 1]
+    return ' '.join(tokens)
+
+def _similaridade(a, b):
+    """Retorna score 0.0–1.0 entre dois nomes normalizados."""
+    na, nb = _normalizar(a), _normalizar(b)
+    if not na or not nb:
+        return 0.0
+    return difflib.SequenceMatcher(None, na, nb).ratio()
+
+def _melhor_match(nome_planilha, candidatos, usados, limiar=0.35):
+    """
+    Dentre os candidatos do YUZER (mesmo preço, mesma cat),
+    retorna o mais similar ao nome da planilha que ainda não foi usado.
+    Retorna (candidato, score) ou (None, 0) se nenhum passar o limiar.
+    """
+    melhor, melhor_score = None, 0.0
+    for c in candidatos:
+        if id(c) in usados:
+            continue
+        score = _similaridade(nome_planilha, c['produto'])
+        if score > melhor_score:
+            melhor, melhor_score = c, score
+    if melhor_score >= limiar:
+        return melhor, melhor_score
+    return None, 0.0
+
+# ---------------------------------------------------------------------------
+# Conciliação por PREÇO + SIMILARIDADE DE NOME
+# ---------------------------------------------------------------------------
+
+LIMIAR_SIMILARIDADE = 0.35  # Score mínimo para aceitar o match
 
 def conciliar(catalogo, vendas, bonus):
     """
+    Para cada produto da planilha (CADASTRO):
+      1. Filtra candidatos do YUZER com o mesmo preço e categoria
+      2. Escolhe o candidato com maior similaridade de nome
+      3. Se score < LIMIAR, marca como não conciliado
     Retorna: {cat: [{nome, linha_cadastro, preco,
-                     qtd_venda, qtd_bonus, qtd_sistema}, ...]}
+                     qtd_venda, qtd_bonus, qtd_sistema,
+                     match_venda, score_venda,
+                     match_bonus, score_bonus}, ...]}
     """
     agrupado = {cat: [] for cat in CAT_INICIO}
 
@@ -326,6 +384,7 @@ def conciliar(catalogo, vendas, bonus):
         v_cat = [p for p in vendas if p['cat'] == cat]
         b_cat = [p for p in bonus  if p['cat'] == cat]
 
+        # Agrupar por preço
         def por_preco(lista):
             d = {}
             for p in lista:
@@ -334,34 +393,55 @@ def conciliar(catalogo, vendas, bonus):
 
         v_map = por_preco(v_cat)
         b_map = por_preco(b_cat)
-        v_pos = {}
-        b_pos = {}
+
+        # Rastrear candidatos já usados (por id do objeto)
+        v_usados = set()
+        b_usados = set()
 
         for item in itens:
             preco = item['preco']
+            nome  = item['nome']
 
-            vi = v_pos.get(preco, 0)
-            vl = v_map.get(preco, [])
-            v = vl[vi] if vi < len(vl) else None
+            # --- Vendas ---
+            v_candidatos = v_map.get(preco, [])
+            if len(v_candidatos) == 1:
+                # Preço único na categoria: match direto
+                v = v_candidatos[0] if id(v_candidatos[0]) not in v_usados else None
+                score_v = 1.0 if v else 0.0
+            else:
+                # Múltiplos com mesmo preço: usar similaridade
+                v, score_v = _melhor_match(nome, v_candidatos, v_usados)
+
             if v:
-                v_pos[preco] = vi + 1
+                v_usados.add(id(v))
 
-            bi = b_pos.get(preco, 0)
-            bl = b_map.get(preco, [])
-            b = bl[bi] if bi < len(bl) else None
+            # --- Bônus ---
+            b_candidatos = b_map.get(preco, [])
+            if len(b_candidatos) == 1:
+                b = b_candidatos[0] if id(b_candidatos[0]) not in b_usados else None
+                score_b = 1.0 if b else 0.0
+            else:
+                b, score_b = _melhor_match(nome, b_candidatos, b_usados)
+
             if b:
-                b_pos[preco] = bi + 1
+                b_usados.add(id(b))
 
             qtd_venda = v['qtd_vendida'] if v else 0
             qtd_bonus = b['qtd_vendida'] if b else 0
 
             agrupado[cat].append({
-                'nome':           item['nome'],
+                'nome':           nome,
                 'linha_cadastro': item['linha_cadastro'],
                 'preco':          preco,
                 'qtd_venda':      qtd_venda,
                 'qtd_bonus':      qtd_bonus,
                 'qtd_sistema':    qtd_venda + qtd_bonus,
+                # Info de conciliação para o painel
+                'match_venda':    v['produto'] if v else None,
+                'score_venda':    round(score_v, 2),
+                'match_bonus':    b['produto'] if b else None,
+                'score_bonus':    round(score_b, 2),
+                'conciliado':     v is not None or b is not None,
             })
 
     return agrupado
@@ -370,38 +450,47 @@ def conciliar(catalogo, vendas, bonus):
 # Builders Google Sheets — usando mapa de linhas real das abas
 # ---------------------------------------------------------------------------
 
-def build_estoque_updates(agrupado, est_map):
-    """ESTOQUE col I = qtd_sistema (vendas + bonus)"""
+def build_estoque_updates(agrupado, est_map=None):
+    """
+    ESTOQUE col I = qtd_sistema (vendas + bonus).
+    Usa linha_cadastro + OFFSET_ESTOQUE (calculado na conciliação).
+    Retorna (updates, nao_conciliados).
+    """
     updates = []
-    nao_encontrados = []
+    nao_conciliados = []
     for prods in agrupado.values():
         for p in prods:
-            linha = est_map.get(p['nome'])
-            if linha:
-                updates.append({
-                    'range':  f"ESTOQUE!I{linha}",
-                    'values': [[p['qtd_sistema']]]
-                })
-            else:
-                nao_encontrados.append(p['nome'])
-    return updates, nao_encontrados
+            linha = p['linha_cadastro'] + OFFSET_ESTOQUE
+            updates.append({'range': f"ESTOQUE!I{linha}", 'values': [[p['qtd_sistema']]]})
+            # Avisar se não foi conciliado com nenhum produto do YUZER
+            if not p.get('conciliado', True) and p['preco'] > 0:
+                nao_conciliados.append(
+                    f"{p['nome']} (R${p['preco']:.2f}) — sem match no YUZER"
+                )
+    return updates, nao_conciliados
 
-def build_producao_updates(agrupado, prod_map):
-    """PRODUÇÃO col C = qtd_bonus (só onde bonus > 0)"""
+def build_producao_updates(agrupado, prod_map=None):
+    """
+    PRODUÇÃO col C = qtd_bonus (só onde bonus > 0).
+    Usa linha_cadastro + OFFSET_PRODUCAO por categoria.
+    Retorna (updates, avisos_baixo_score).
+    """
     updates = []
-    nao_encontrados = []
-    for prods in agrupado.values():
+    avisos_score = []
+    for cat, prods in agrupado.items():
+        offset = OFFSET_PRODUCAO.get(cat, -10)
         for p in prods:
             if p['qtd_bonus'] > 0:
-                linha = prod_map.get(p['nome'])
-                if linha:
-                    updates.append({
-                        'range':  f"PRODUÇÃO!C{linha}",
-                        'values': [[p['qtd_bonus']]]
-                    })
-                else:
-                    nao_encontrados.append(p['nome'])
-    return updates, nao_encontrados
+                linha = p['linha_cadastro'] + offset
+                updates.append({'range': f"PRODUÇÃO!C{linha}", 'values': [[p['qtd_bonus']]]})
+                # Avisar se score de similaridade foi baixo
+                score = p.get('score_bonus', 1.0)
+                if score < 0.6 and p.get('match_bonus'):
+                    avisos_score.append(
+                        f"Bônus: '{p['nome']}' conciliado com '{p['match_bonus']}' "
+                        f"(similaridade {int(score*100)}%) — confira"
+                    )
+    return updates, avisos_score
 
 # ---------------------------------------------------------------------------
 # Rotas
@@ -467,6 +556,79 @@ def preview():
                         'trace': traceback.format_exc()}), 400
 
 
+# ---------------------------------------------------------------------------
+# Mapeamento fixo YUZER → Planilha (salvo em memória do servidor)
+# Estrutura: { "Nome YUZER": "Nome Planilha", ... }
+# ---------------------------------------------------------------------------
+_mapeamento_store = {}
+
+@app.route('/api/mapeamento', methods=['GET'])
+def get_mapeamento():
+    return jsonify({'success': True, 'mapeamento': _mapeamento_store})
+
+@app.route('/api/mapeamento', methods=['POST'])
+def save_mapeamento():
+    data = request.get_json(force=True) or {}
+    mapa = data.get('mapeamento', {})
+    _mapeamento_store.clear()
+    _mapeamento_store.update(mapa)
+    return jsonify({'success': True, 'total': len(_mapeamento_store)})
+
+# ---------------------------------------------------------------------------
+# Limpeza de células antes de enviar
+# ---------------------------------------------------------------------------
+
+def limpar_planilha(service, spreadsheet_id):
+    """
+    Zera ESTOQUE col I (linhas 6-76), PRODUÇÃO col C (linhas 5-70)
+    e FECHAMENTO CAIXAS B3:H52 antes de escrever dados novos.
+    Só limpa valores — fórmulas em outras colunas ficam intactas.
+    """
+    ranges = [
+        'ESTOQUE!I6:I76',
+        'PRODUÇÃO!C5:C70',
+        'FECHAMENTO CAIXAS!B3:H52',
+    ]
+    service.spreadsheets().values().batchClear(
+        spreadsheetId=spreadsheet_id,
+        body={'ranges': ranges}
+    ).execute()
+
+# ---------------------------------------------------------------------------
+# Validação de totais
+# ---------------------------------------------------------------------------
+
+def validar_totais(agrupado, painel):
+    """
+    Compara soma dos qtd_sistema × preço com o total do painel de vendas.
+    Retorna lista de avisos.
+    """
+    avisos = []
+    total_painel = float(painel.get('Total', 0) or 0)
+    if total_painel == 0:
+        return avisos
+
+    total_calculado = sum(
+        p['qtd_venda'] * p['preco']
+        for prods in agrupado.values()
+        for p in prods
+    )
+
+    if total_calculado == 0:
+        return avisos
+
+    diferenca = abs(total_painel - total_calculado)
+    pct = (diferenca / total_painel) * 100 if total_painel else 0
+
+    if diferenca > 1.0:  # tolerância de R$1,00 para arredondamentos
+        avisos.append(
+            f'Divergência de totais: Painel = R${total_painel:,.2f} | '
+            f'Calculado pelo sistema = R${total_calculado:,.2f} | '
+            f'Diferença = R${diferenca:,.2f} ({pct:.1f}%)'
+        )
+    return avisos
+
+
 @app.route('/api/enviar', methods=['POST'])
 def enviar():
     try:
@@ -479,9 +641,14 @@ def enviar():
                 spreadsheet_id = m.group(1)
 
         service = get_sheets_service()
-        batch = []
-        msgs  = []
+        batch  = []
+        msgs   = []
         avisos = []
+        painel_data = {}
+
+        # ---- LIMPEZA PRÉVIA ----
+        limpar_planilha(service, spreadsheet_id)
+        msgs.append('Planilha limpa (ESTOQUE col I, PRODUÇÃO col C, CAIXAS)')
 
         # ---- Produtos vendidos + bônus ----
         if 'produtos_vendidos' in request.files:
@@ -495,32 +662,49 @@ def enviar():
                            if fname.lower().endswith('.pdf')
                            else parse_produtos_xlsx(b_bytes))
 
+            # Aplicar mapeamento fixo aos nomes do YUZER
+            if _mapeamento_store:
+                for p in vendas + bonus:
+                    if p['produto'] in _mapeamento_store:
+                        p['produto_original'] = p['produto']
+                        p['produto'] = _mapeamento_store[p['produto']]
+
             # Ler catálogo do CADASTRO
             catalogo = ler_cadastro(service, spreadsheet_id)
             total_cat = sum(len(v) for v in catalogo.values())
             msgs.append(f'CADASTRO: {total_cat} produtos lidos')
 
-            # Ler mapas de linhas reais do ESTOQUE e PRODUÇÃO
-            est_map, prod_map = ler_mapa_linhas(service, spreadsheet_id)
-            msgs.append(f'ESTOQUE: {len(est_map)} produtos mapeados')
-            msgs.append(f'PRODUÇÃO: {len(prod_map)} produtos mapeados')
-
-            # Conciliar por preço + posição
+            # Conciliar por preço + similaridade de nome
             agrupado = conciliar(catalogo, vendas, bonus)
 
+            # Estatísticas de conciliação
+            total_prod  = sum(len(v) for v in agrupado.values())
+            conciliados = sum(1 for prods in agrupado.values() for p in prods if p.get('conciliado'))
+            nao_conc    = sum(1 for prods in agrupado.values() for p in prods if not p.get('conciliado') and p['preco'] > 0)
+            msgs.append(f'Conciliação: {conciliados}/{total_prod} produtos encontrados no YUZER')
+            if nao_conc:
+                avisos.append(f'{nao_conc} produto(s) da planilha sem correspondência no YUZER')
+
+            # Avisos de score baixo
+            matches_baixos = [
+                f"'{p['nome']}' → '{p['match_venda']}' ({int(p['score_venda']*100)}%)"
+                for prods in agrupado.values() for p in prods
+                if p.get('match_venda') and 0 < p.get('score_venda', 1) < 0.6
+            ]
+            if matches_baixos:
+                avisos.append(f'Matches incertos — confira: {"; ".join(matches_baixos[:5])}')
+
             # ESTOQUE col I
-            est_updates, est_nf = build_estoque_updates(agrupado, est_map)
+            est_updates, est_nf = build_estoque_updates(agrupado)
             batch.extend(est_updates)
             msgs.append(f'ESTOQUE col I: {len(est_updates)} produtos preenchidos (vendas + bônus)')
-            if est_nf:
-                avisos.append(f'ESTOQUE não encontrados: {est_nf}')
+            for a in est_nf: avisos.append(a)
 
             # PRODUÇÃO col C
-            prod_updates, prod_nf = build_producao_updates(agrupado, prod_map)
+            prod_updates, prod_avisos = build_producao_updates(agrupado)
             batch.extend(prod_updates)
             msgs.append(f'PRODUÇÃO col C: {len(prod_updates)} produtos com bônus/cortesia preenchidos')
-            if prod_nf:
-                avisos.append(f'PRODUÇÃO não encontrados: {prod_nf}')
+            for a in prod_avisos: avisos.append(a)
 
         # ---- Caixas ----
         if 'exportacao_caixas' in request.files:
@@ -536,8 +720,8 @@ def enviar():
 
         # ---- Painel → RESUMO ----
         if 'painel_de_vendas' in request.files:
-            painel = parse_painel_vendas(request.files['painel_de_vendas'].read())
-            fp = painel.get('formas_pagamento', {})
+            painel_data = parse_painel_vendas(request.files['painel_de_vendas'].read())
+            fp = painel_data.get('formas_pagamento', {})
             batch.append({
                 'range': 'RESUMO!B3:B7',
                 'values': [
@@ -549,6 +733,11 @@ def enviar():
                 ],
             })
             msgs.append('RESUMO: formas de pagamento preenchidas')
+
+            # ---- VALIDAÇÃO DE TOTAIS ----
+            if 'produtos_vendidos' in request.files and agrupado:
+                for a in validar_totais(agrupado, painel_data):
+                    avisos.append(a)
 
         # ---- Enviar tudo de uma vez ----
         if batch:
