@@ -647,9 +647,14 @@
         <h1>PRIME <span>BAR</span></h1>
         <p>Integração YUZER → Google Sheets</p>
       </div>
-      <div class="status-badge">
-        <div class="status-dot"></div>
-        Sistema Online
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <button class="btn btn-secondary" onclick="abrirMapeamento()" style="font-size:12px;padding:8px 14px;">
+          🔗 Mapeamento
+        </button>
+        <div class="status-badge">
+          <div class="status-dot"></div>
+          Sistema Online
+        </div>
       </div>
     </div>
   </header>
@@ -853,6 +858,43 @@
     </button>
   </div>
 
+</div>
+
+<!-- MODAL MAPEAMENTO -->
+<div id="modal-mapeamento" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:2000;overflow-y:auto;padding:24px 16px;">
+  <div style="max-width:700px;margin:0 auto;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:32px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;">
+      <div>
+        <h2 style="font-family:'Bebas Neue',sans-serif;font-size:24px;letter-spacing:2px;color:var(--gold);">🔗 Mapeamento YUZER → Planilha</h2>
+        <p style="font-size:12px;color:var(--muted);margin-top:4px;">Defina uma vez. O sistema sempre usará esses nomes na conciliação.</p>
+      </div>
+      <button onclick="fecharMapeamento()" style="background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;padding:4px;">✕</button>
+    </div>
+
+    <div class="guide-box" style="margin-bottom:20px;">
+      <h4>Como usar</h4>
+      <p style="font-size:13px;color:var(--muted);line-height:1.6;">
+        Coluna <strong style="color:var(--white)">Nome no YUZER</strong>: exatamente como aparece no arquivo exportado.<br>
+        Coluna <strong style="color:var(--white)">Nome na Planilha</strong>: exatamente como está no CADASTRO.<br>
+        Exemplo: <code style="color:var(--gold)">Água Sem Gás</code> → <code style="color:var(--gold)">ÁGUA 500ML</code>
+      </p>
+    </div>
+
+    <div id="mapa-linhas" style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;"></div>
+
+    <button onclick="adicionarLinhasMapa()" class="btn btn-secondary" style="font-size:12px;padding:8px 16px;margin-bottom:20px;">
+      + Adicionar linha
+    </button>
+
+    <div style="display:flex;gap:12px;flex-wrap:wrap;">
+      <button onclick="salvarMapeamento()" class="btn btn-primary">
+        <span class="btn-text">💾 Salvar Mapeamento</span>
+        <div class="spinner"></div>
+      </button>
+      <button onclick="limparMapeamento()" class="btn btn-secondary" style="font-size:12px;">🗑 Limpar tudo</button>
+      <div id="mapa-status" style="font-size:12px;color:var(--success);align-self:center;"></div>
+    </div>
+  </div>
 </div>
 
 <!-- TOAST -->
@@ -1059,48 +1101,62 @@
         `).join('')}
       </div>`;
 
-    // Conciliação
-    const ci = data.conciliacao_info || {};
+    // Conciliação — mostrar matches com score de similaridade
     const produtosYuzer = data.produtos || [];
-    const bonusYuzer = data.bonus || [];
-    const catNomes = {'BEBIDAS NAO ALCOOLICAS':'Beb. Não Alc.','BEBIDAS ALCOOLICAS':'Beb. Alcoólicas','DESTILADOS':'Destilados','COMBOS':'Combos','DRINK':'Drinks','DOSES & OUTROS':'Doses & Outros'};
+    const bonusYuzer    = data.bonus || [];
+    const catNomes = {
+      'BEBIDAS NAO ALCOOLICAS':'Beb. Não Alcoólicas',
+      'BEBIDAS ALCOOLICAS':'Beb. Alcoólicas',
+      'DESTILADOS':'Destilados',
+      'COMBOS':'Combos',
+      'DRINK':'Drinks',
+      'DOSES & OUTROS':'Doses & Outros'
+    };
+
+    // Montar tabela de matches por produto (vem do /api/preview com conciliacao_simulada)
+    // No preview não temos o catálogo da planilha, então mostramos os produtos do YUZER por categoria
     const porCat = {};
     produtosYuzer.forEach(p => {
-      if (!porCat[p.cat]) porCat[p.cat] = {vendas:0, bonus:0};
-      porCat[p.cat].vendas++;
+      if (!porCat[p.cat]) porCat[p.cat] = {vendas:[], bonus:[]};
+      porCat[p.cat].vendas.push(p);
     });
     bonusYuzer.forEach(p => {
-      if (!porCat[p.cat]) porCat[p.cat] = {vendas:0, bonus:0};
-      porCat[p.cat].bonus++;
+      if (!porCat[p.cat]) porCat[p.cat] = {vendas:[], bonus:[]};
+      if (!porCat[p.cat]) porCat[p.cat] = {vendas:[], bonus:[]};
+      porCat[p.cat].bonus.push(p);
     });
+
+    const linhasTabela = Object.entries(porCat).map(([cat, v]) => `
+      <tr>
+        <td><strong>${catNomes[cat]||cat}</strong></td>
+        <td>${v.vendas.map(p=>`<div style="font-size:11px">${p.produto} <span style="color:var(--gold)">R$${p.preco.toFixed(2)}</span> × ${p.qtd_vendida}</div>`).join('') || '<span style="color:var(--muted)">—</span>'}</td>
+        <td>${v.bonus.map(p=>`<div style="font-size:11px">${p.produto} <span style="color:var(--gold)">R$${p.preco.toFixed(2)}</span> × ${p.qtd_vendida}</div>`).join('') || '<span style="color:var(--muted)">—</span>'}</td>
+      </tr>
+    `).join('');
+
     document.getElementById('conciliacao-content').innerHTML = `
       <div class="guide-box" style="margin-bottom:16px;">
         <h4>ℹ️ Como funciona a conciliação</h4>
         <p style="font-size:13px;color:var(--muted);line-height:1.6;">
-          O sistema concilia os produtos do YUZER com a planilha pelo <strong style="color:var(--white)">preço + posição por categoria</strong>.
-          Se dois produtos têm o mesmo preço na mesma categoria, o 1º no YUZER vai para o 1º na planilha.
-          Confira abaixo quantos produtos por categoria foram lidos dos arquivos.
+          O sistema concilia por <strong style="color:var(--white)">preço + similaridade de nome</strong>.
+          Quando dois produtos têm o mesmo preço na mesma categoria, o sistema escolhe o candidato com nome mais parecido.
+          Após o envio, <strong style="color:var(--white)">avisos</strong> indicarão matches com baixa similaridade para você conferir.
         </p>
       </div>
       <div class="table-scroll">
         <table class="preview-table">
           <thead>
-            <tr><th>Categoria</th><th>Produtos Vendidos</th><th>Produtos Bônus</th><th>Status</th></tr>
+            <tr>
+              <th>Categoria</th>
+              <th>Vendidos no YUZER</th>
+              <th>Bônus no YUZER</th>
+            </tr>
           </thead>
-          <tbody>
-            ${Object.entries(porCat).map(([cat, v]) => `
-              <tr>
-                <td>${catNomes[cat]||cat}</td>
-                <td><strong>${v.vendas}</strong></td>
-                <td><strong style="color:var(--gold)">${v.bonus}</strong></td>
-                <td><span style="color:var(--success)">✅ Lido</span></td>
-              </tr>
-            `).join('')}
-          </tbody>
+          <tbody>${linhasTabela}</tbody>
         </table>
       </div>
       <p style="font-size:12px;color:var(--muted);margin-top:12px;">
-        ⚠️ Produtos com preço não encontrado na planilha serão indicados nos <strong>avisos</strong> após o envio.
+        ⚠️ Matches com similaridade abaixo de 60% serão indicados como avisos após o envio.
       </p>`;
   }
 
@@ -1170,6 +1226,105 @@
   }
 
   // =========================================================
+  // MAPEAMENTO FIXO YUZER → PLANILHA
+  // =========================================================
+
+  async function abrirMapeamento() {
+    document.getElementById('modal-mapeamento').style.display = 'block';
+    document.body.style.overflow = 'hidden';
+    // Carregar mapeamento salvo
+    try {
+      const res = await fetch(`${API}/api/mapeamento`);
+      const json = await res.json();
+      const mapa = json.mapeamento || {};
+      const linhas = document.getElementById('mapa-linhas');
+      linhas.innerHTML = '';
+      const entries = Object.entries(mapa);
+      if (entries.length === 0) {
+        adicionarLinhasMapa();
+      } else {
+        entries.forEach(([yuzer, planilha]) => adicionarLinhasMapa(yuzer, planilha));
+      }
+    } catch(e) {
+      adicionarLinhasMapa();
+    }
+  }
+
+  function fecharMapeamento() {
+    document.getElementById('modal-mapeamento').style.display = 'none';
+    document.body.style.overflow = '';
+  }
+
+  function adicionarLinhasMapa(yuzer='', planilha='') {
+    const container = document.getElementById('mapa-linhas');
+    const id = Date.now() + Math.random();
+    const div = document.createElement('div');
+    div.id = `mapa-linha-${id}`;
+    div.style.cssText = 'display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;';
+    div.innerHTML = `
+      <input type="text" placeholder="Nome no YUZER (ex: Água Sem Gás)" value="${yuzer}"
+        style="background:var(--black);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--white);font-size:13px;outline:none;font-family:'DM Sans',sans-serif;"
+        class="mapa-yuzer" onfocus="this.style.borderColor='var(--gold)'" onblur="this.style.borderColor='var(--border)'">
+      <input type="text" placeholder="Nome na Planilha (ex: ÁGUA 500ML)" value="${planilha}"
+        style="background:var(--black);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--white);font-size:13px;outline:none;font-family:'DM Sans',sans-serif;"
+        class="mapa-planilha" onfocus="this.style.borderColor='var(--gold)'" onblur="this.style.borderColor='var(--border)'">
+      <button onclick="document.getElementById('mapa-linha-${id}').remove()"
+        style="background:none;border:1px solid var(--border);border-radius:8px;color:var(--muted);padding:10px 12px;cursor:pointer;font-size:14px;">✕</button>
+    `;
+    container.appendChild(div);
+  }
+
+  async function salvarMapeamento() {
+    const yuzerInputs    = document.querySelectorAll('.mapa-yuzer');
+    const planilhaInputs = document.querySelectorAll('.mapa-planilha');
+    const mapeamento = {};
+    yuzerInputs.forEach((inp, i) => {
+      const y = inp.value.trim();
+      const p = planilhaInputs[i]?.value.trim();
+      if (y && p) mapeamento[y] = p;
+    });
+    try {
+      const res = await fetch(`${API}/api/mapeamento`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({mapeamento})
+      });
+      const json = await res.json();
+      if (json.success) {
+        const st = document.getElementById('mapa-status');
+        st.textContent = `✅ ${json.total} mapeamento(s) salvo(s)`;
+        setTimeout(() => { st.textContent = ''; fecharMapeamento(); }, 1500);
+        // Salvar também no localStorage para persistir entre sessões
+        localStorage.setItem('primebar_mapeamento', JSON.stringify(mapeamento));
+      }
+    } catch(e) {
+      showToast('error', 'Erro ao salvar', e.message);
+    }
+  }
+
+  function limparMapeamento() {
+    if (confirm('Limpar todo o mapeamento?')) {
+      document.getElementById('mapa-linhas').innerHTML = '';
+      adicionarLinhasMapa();
+      localStorage.removeItem('primebar_mapeamento');
+    }
+  }
+
+  // Ao abrir o app, restaurar mapeamento salvo no servidor via localStorage
+  async function restaurarMapeamento() {
+    const local = localStorage.getItem('primebar_mapeamento');
+    if (local) {
+      try {
+        await fetch(`${API}/api/mapeamento`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: local
+        });
+      } catch(e) {}
+    }
+  }
+
+  // =========================================================
   // HISTÓRICO DE EVENTOS
   // =========================================================
   function salvarHistorico(json) {
@@ -1226,7 +1381,10 @@
   }
 
   // Carregar histórico ao iniciar
-  document.addEventListener('DOMContentLoaded', renderHistorico);
+  document.addEventListener('DOMContentLoaded', () => {
+    renderHistorico();
+    restaurarMapeamento();
+  });
 
   function resetApp() {
     document.getElementById('main-flow').style.display = 'grid';
