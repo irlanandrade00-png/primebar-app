@@ -580,19 +580,35 @@ def save_mapeamento():
 
 def limpar_planilha(service, spreadsheet_id):
     """
-    Zera ESTOQUE col I (linhas 6-76), PRODUÇÃO col C (linhas 5-70)
+    Zera ESTOQUE col I (linhas 6-76), PRODUCAO col C (linhas 5-70)
     e FECHAMENTO CAIXAS B3:H52 antes de escrever dados novos.
-    Só limpa valores — fórmulas em outras colunas ficam intactas.
+    Limpa cada aba individualmente para evitar erro com acentos na API.
     """
     ranges = [
         'ESTOQUE!I6:I76',
-        'PRODUÇÃO!C5:C70',
         'FECHAMENTO CAIXAS!B3:H52',
     ]
+    # Limpar ESTOQUE e CAIXAS
     service.spreadsheets().values().batchClear(
         spreadsheetId=spreadsheet_id,
         body={'ranges': ranges}
     ).execute()
+
+    # Limpar PRODUÇÃO separadamente (aba com acento)
+    try:
+        service.spreadsheets().values().clear(
+            spreadsheetId=spreadsheet_id,
+            range='PRODUÇÃO!C5:C70'
+        ).execute()
+    except Exception:
+        # Tentar sem acento como fallback
+        try:
+            service.spreadsheets().values().clear(
+                spreadsheetId=spreadsheet_id,
+                range='PRODUCAO!C5:C70'
+            ).execute()
+        except Exception:
+            pass  # Se falhar, segue sem limpar — não bloqueia o envio
 
 # ---------------------------------------------------------------------------
 # Validação de totais
@@ -647,8 +663,11 @@ def enviar():
         painel_data = {}
 
         # ---- LIMPEZA PRÉVIA ----
-        limpar_planilha(service, spreadsheet_id)
-        msgs.append('Planilha limpa (ESTOQUE col I, PRODUÇÃO col C, CAIXAS)')
+        try:
+            limpar_planilha(service, spreadsheet_id)
+            msgs.append('Planilha limpa (ESTOQUE col I, PRODUÇÃO col C, CAIXAS)')
+        except Exception as e_limpa:
+            avisos.append(f'Limpeza prévia falhou (dados anteriores podem permanecer): {str(e_limpa)[:80]}')
 
         # ---- Produtos vendidos + bônus ----
         if 'produtos_vendidos' in request.files:
