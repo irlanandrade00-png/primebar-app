@@ -76,6 +76,20 @@ IGNORAR_NOMES = {
     'RESUMO ALIMENTAÇAO', 'TOTAL / CARTÃO', 'TOTAL',
 }
 
+# Offsets reais medidos na planilha SAMBA_NO_PARQUE_TESTE123
+# CADASTRO linha X -> ESTOQUE col I linha (X + OFFSET_ESTOQUE)
+OFFSET_ESTOQUE = -10  # igual para todas as categorias
+
+# CADASTRO linha X -> PRODUÇÃO col C linha (X + OFFSET_PRODUCAO[cat])
+OFFSET_PRODUCAO = {
+    'BEBIDAS NAO ALCOOLICAS': -11,  # CAD L16 -> PROD L5
+    'BEBIDAS ALCOOLICAS':     -10,  # CAD L32 -> PROD L22
+    'DESTILADOS':             -10,  # CAD L39 -> PROD L29
+    'COMBOS':                 -10,  # CAD L52 -> PROD L42
+    'DRINK':                  -10,  # CAD L68 -> PROD L58
+    'DOSES & OUTROS':         -10,  # CAD L79 -> PROD L69
+}
+
 # ---------------------------------------------------------------------------
 # Parser: Produtos Vendidos XLSX (Arquivo 1)
 # ---------------------------------------------------------------------------
@@ -657,10 +671,11 @@ def enviar():
                 spreadsheet_id = m.group(1)
 
         service = get_sheets_service()
-        batch  = []
-        msgs   = []
-        avisos = []
+        batch      = []
+        msgs       = []
+        avisos     = []
         painel_data = {}
+        agrupado   = {}   # inicializar para evitar NameError na validação de totais
 
         # ---- LIMPEZA PRÉVIA ----
         try:
