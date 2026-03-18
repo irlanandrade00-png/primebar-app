@@ -683,10 +683,17 @@
       <div class="guide-box">
         <h4>Como encontrar o link</h4>
         <ol>
-          <li>Abra a planilha do evento no Google Sheets</li>
+          <li>Abra a planilha do evento no <strong>Google Sheets</strong></li>
           <li>Copie o link completo da barra de endereço do navegador</li>
           <li>Cole no campo acima — o sistema extrai o ID automaticamente</li>
         </ol>
+      </div>
+      <div style="background:rgba(224,82,82,0.08);border:1px solid rgba(224,82,82,0.3);border-radius:10px;padding:14px 18px;margin-top:14px;display:flex;gap:12px;align-items:flex-start;">
+        <span style="font-size:18px;flex-shrink:0;">⚠️</span>
+        <div>
+          <div style="font-size:13px;font-weight:600;color:#f0ece4;margin-bottom:4px;">A planilha precisa estar no Google Sheets</div>
+          <div style="font-size:12px;color:#888;line-height:1.6;">Arquivos <strong style="color:#f0ece4;">.xls ou .xlsx</strong> salvos localmente não funcionam. Abra a planilha no Google Sheets e compartilhe com a conta de serviço antes de usar o sistema.</div>
+        </div>
       </div>
 
       <div class="btn-group">
@@ -769,6 +776,7 @@
           <button class="tab-btn" onclick="showTab('tab-caixas', this)">💳 Caixas</button>
           <button class="tab-btn" onclick="showTab('tab-pagamentos', this)">💰 Pagamentos</button>
           <button class="tab-btn" onclick="showTab('tab-conciliacao', this)">⚠️ Conciliação</button>
+          <button class="tab-btn" id="btn-tab-naoident" onclick="showTab('tab-naoident', this)" style="display:none;">🔧 Não Identificados</button>
         </div>
 
         <div class="tab-content active" id="tab-produtos">
@@ -831,6 +839,21 @@
 
         <div class="tab-content" id="tab-conciliacao">
           <div id="conciliacao-content"></div>
+        </div>
+
+        <div class="tab-content" id="tab-naoident">
+          <div class="guide-box" style="margin-bottom:16px;">
+            <h4>🔧 Corrigir produtos não identificados</h4>
+            <p style="font-size:13px;color:var(--muted);line-height:1.6;">
+              Esses produtos vieram do YUZER mas não foram conciliados com nenhum item da planilha.
+              Digite o nome <strong style="color:var(--white)">exatamente como está no CADASTRO</strong> para corrigir antes de enviar.
+              O sistema salvará o mapeamento automaticamente para os próximos eventos.
+            </p>
+          </div>
+          <div id="naoident-lista" style="display:flex;flex-direction:column;gap:8px;"></div>
+          <div id="naoident-vazio" style="text-align:center;padding:32px;color:var(--muted);font-size:13px;display:none;">
+            ✅ Todos os produtos foram identificados automaticamente!
+          </div>
         </div>
       </div>
 
@@ -1101,6 +1124,9 @@
         `).join('')}
       </div>`;
 
+    // Não identificados — produtos do YUZER sem match
+    renderNaoIdentificados(data);
+
     // Conciliação — mostrar matches com score de similaridade
     const produtosYuzer = data.produtos || [];
     const bonusYuzer    = data.bonus || [];
@@ -1205,6 +1231,85 @@
     } finally {
       btn.classList.remove('loading');
       btn.disabled = false;
+    }
+  }
+
+  function renderNaoIdentificados(data) {
+    const vendas  = data.produtos || [];
+    const bonus   = data.bonus   || [];
+    const todos   = [...vendas, ...bonus];
+
+    // Produtos com score baixo ou sem match (simulado no preview pelo score < 0.5)
+    // No preview não temos o catálogo, então mostramos produtos únicos para mapeamento manual
+    const btnTab  = document.getElementById('btn-tab-naoident');
+    const lista   = document.getElementById('naoident-lista');
+    const vazio   = document.getElementById('naoident-vazio');
+
+    // Mostrar todos produtos do YUZER para mapeamento manual opcional
+    const unicos = [];
+    const vistos = new Set();
+    todos.forEach(p => {
+      const key = p.produto + '|' + p.preco;
+      if (!vistos.has(key)) { vistos.add(key); unicos.push(p); }
+    });
+
+    if (unicos.length === 0) {
+      btnTab.style.display = 'none';
+      return;
+    }
+
+    btnTab.style.display = 'inline-flex';
+    lista.innerHTML = '';
+    vazio.style.display = 'none';
+
+    // Carregar mapeamento existente
+    const mapaExistente = JSON.parse(localStorage.getItem('primebar_mapeamento') || '{}');
+
+    unicos.forEach(p => {
+      const id = 'ni_' + p.produto.replace(/[^a-z0-9]/gi,'_');
+      const valorAtual = mapaExistente[p.produto] || '';
+      const div = document.createElement('div');
+      div.style.cssText = 'display:grid;grid-template-columns:1fr auto 1fr auto;gap:8px;align-items:center;background:var(--black);border:1px solid var(--border);border-radius:8px;padding:10px 14px;';
+      div.innerHTML = `
+        <div>
+          <div style="font-size:12px;font-weight:600;color:var(--white);">${p.produto}</div>
+          <div style="font-size:11px;color:var(--gold);">R$${(p.preco||0).toFixed(2)} · ${p.cat||''}</div>
+        </div>
+        <span style="color:var(--muted);font-size:16px;">→</span>
+        <input type="text" placeholder="Nome na planilha (CADASTRO)" value="${valorAtual}"
+          id="${id}"
+          style="background:var(--dark);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--white);font-size:12px;outline:none;font-family:'DM Sans',sans-serif;width:100%;"
+          onfocus="this.style.borderColor='var(--gold)'"
+          onblur="this.style.borderColor='var(--border)'"
+          data-yuzer="${p.produto}">
+        <button onclick="salvarLinhaMapping('${p.produto}', document.getElementById('${id}').value)"
+          style="background:var(--gold);color:var(--black);border:none;border-radius:6px;padding:8px 12px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;">
+          💾 Salvar
+        </button>
+      `;
+      lista.appendChild(div);
+    });
+  }
+
+  async function salvarLinhaMapping(nomeYuzer, nomePlanilha) {
+    if (!nomePlanilha.trim()) {
+      showToast('error', 'Campo vazio', 'Digite o nome do produto na planilha.');
+      return;
+    }
+    // Atualizar localStorage
+    const mapa = JSON.parse(localStorage.getItem('primebar_mapeamento') || '{}');
+    mapa[nomeYuzer] = nomePlanilha.trim();
+    localStorage.setItem('primebar_mapeamento', JSON.stringify(mapa));
+    // Enviar para o servidor
+    try {
+      await fetch(`${API}/api/mapeamento`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({mapeamento: mapa})
+      });
+      showToast('success', 'Mapeamento salvo!', `"${nomeYuzer}" → "${nomePlanilha.trim()}"`);
+    } catch(e) {
+      showToast('error', 'Erro ao salvar', e.message);
     }
   }
 
