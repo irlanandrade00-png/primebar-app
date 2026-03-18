@@ -95,6 +95,11 @@ OFFSET_PRODUCAO = {
 # ---------------------------------------------------------------------------
 
 def parse_produtos_xlsx(file_bytes):
+    """
+    Lê relatório de produtos do YUZER.
+    Coluna H (índice 7) = QUANTIDADE (consumo final após devoluções) — usar esta.
+    Coluna I (índice 8) = PREÇO unitário.
+    """
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     ws = wb.active
     produtos = []
@@ -104,14 +109,29 @@ def parse_produtos_xlsx(file_bytes):
             header_found = True
             continue
         if header_found and row[0] is not None:
+            # Pular linhas de total (sem subcategoria ou só números)
+            if not row[3]:
+                continue
             subcat = str(row[3]).strip().upper() if row[3] else ''
             cat = MAPA_SUBCAT.get(subcat, 'DOSES & OUTROS')
+            # Col H (idx 7) = quantidade final (após devoluções)
+            # Col I (idx 8) = preço unitário
+            try:
+                qtd = int(float(str(row[7] or 0).replace(',','.')))
+            except Exception:
+                qtd = 0
+            try:
+                preco = round(float(str(row[8] or 0).replace('R$','').replace('.','').replace(',','.')), 2)
+            except Exception:
+                preco = 0.0
+            if qtd <= 0:
+                continue
             produtos.append({
-                'produto':     str(row[0]).strip(),
+                'produto':      str(row[0]).strip(),
                 'subcategoria': subcat,
-                'cat':         cat,
-                'qtd_vendida': int(row[5] or 0),
-                'preco':       round(float(row[8] or 0), 2),
+                'cat':          cat,
+                'qtd_vendida':  qtd,
+                'preco':        preco,
             })
     return produtos
 
@@ -203,27 +223,85 @@ def parse_bonus_pdf(file_bytes):
 
 # ---------------------------------------------------------------------------
 # Parser: Exportação Caixas XLSX (Arquivo 2)
+# Estrutura real (linha 10 = cabeçalho):
+# Col A=Id, B=Usuário, C=CPF, D=Serial, E=Painel de vendas,
+# F=Operação ("Caixa PIX" ou "GARÇOM PIX"), G=Total, H=Re-impressões
+# Pagamentos vêm nas colunas seguintes (buscar por cabeçalho dinâmico)
 # ---------------------------------------------------------------------------
 
 def parse_caixas(file_bytes):
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     ws = wb.active
     caixas = []
-    header_found = False
-    for row in ws.iter_rows(values_only=True):
+    header_row = None
+    col_map = {}
+
+    for i, row in enumerate(ws.iter_rows(values_only=True), 1):
+        # Encontrar linha de cabeçalho pelo campo "Id"
         if row[0] == 'Id':
-            header_found = True
+            header_row = i
+            for j, val in enumerate(row):
+                if val:
+                    col_map[str(val).strip().lower()] = j
             continue
-        if header_found and row[0] is not None:
+
+        if header_row and row[0] is not None and str(row[0]).strip():
+            # Pular linhas vazias ou de totais
+            if not str(row[0]).strip().startswith('69'):  # IDs começam com hash longo
+                try:
+                    uuid_like = len(str(row[0]).strip()) > 10
+                    if not uuid_like:
+                        continue
+                except:
+                    continue
+
+            def get_col(names, default=0):
+                for n in names:
+                    if n in col_map:
+                        v = row[col_map[n]]
+                        try: return round(float(str(v or 0).replace('R$','').replace('.','').replace(',','.')), 2)
+                        except: return default
+                return default
+
+            operacao = str(row[col_map.get('operação', col_map.get('operacao', 5))] or '').strip()
+            usuario  = str(row[col_map.get('usuário', col_map.get('usuario', 1))] or '').strip()
+            serial   = str(row[col_map.get('serial', 3)] or '').strip()
+
+            # Total direto da coluna G (índice 6)
+            try:
+                total = round(float(str(row[6] or 0).replace('R$','').replace('.','').replace(',','.')), 2)
+            except:
+                total = 0.0
+
+            # Formas de pagamento — colunas dinâmicas após col H
+            # Buscar por nome nas colunas do cabeçalho
+            credito  = get_col(['crédito', 'credito', 'credit_card'])
+            debito   = get_col(['débito', 'debito', 'debit_card'])
+            dinheiro = get_col(['dinheiro', 'cash'])
+            pix      = get_col(['pix'])
+
+            # Fallback: colunas fixas conhecidas se não encontrar por nome
+            if credito == 0 and debito == 0 and dinheiro == 0 and pix == 0:
+                try: credito  = round(float(row[12] or 0), 2)
+                except: pass
+                try: debito   = round(float(row[13] or 0), 2)
+                except: pass
+                try: dinheiro = round(float(row[14] or 0), 2)
+                except: pass
+                try: pix      = round(float(row[15] or 0), 2)
+                except: pass
+
             caixas.append({
-                'usuario':  str(row[1] or ''),
-                'serial':   str(row[3] or ''),
-                'total':    round(float(row[6]  or 0), 2),
-                'credito':  round(float(row[12] or 0), 2),
-                'debito':   round(float(row[13] or 0), 2),
-                'pix':      round(float(row[14] or 0), 2),
-                'dinheiro': round(float(row[15] or 0), 2),
+                'usuario':  usuario,
+                'serial':   serial,
+                'operacao': operacao,
+                'total':    total,
+                'credito':  credito,
+                'debito':   debito,
+                'dinheiro': dinheiro,
+                'pix':      pix,
             })
+
     return caixas
 
 # ---------------------------------------------------------------------------
@@ -466,8 +544,7 @@ def conciliar(catalogo, vendas, bonus):
 
 def build_estoque_updates(agrupado, est_map=None):
     """
-    ESTOQUE col I = qtd_sistema (vendas + bonus).
-    Usa linha_cadastro + OFFSET_ESTOQUE (calculado na conciliação).
+    ESTOQUE col I = qtd_venda APENAS (sem bônus — bônus vai só em PRODUÇÃO col C).
     Retorna (updates, nao_conciliados).
     """
     updates = []
@@ -475,8 +552,8 @@ def build_estoque_updates(agrupado, est_map=None):
     for prods in agrupado.values():
         for p in prods:
             linha = p['linha_cadastro'] + OFFSET_ESTOQUE
-            updates.append({'range': f"ESTOQUE!I{linha}", 'values': [[p['qtd_sistema']]]})
-            # Avisar se não foi conciliado com nenhum produto do YUZER
+            # Só vendas — bônus fica exclusivamente na PRODUÇÃO col C
+            updates.append({'range': f"ESTOQUE!I{linha}", 'values': [[p['qtd_venda']]]})
             if not p.get('conciliado', True) and p['preco'] > 0:
                 nao_conciliados.append(
                     f"{p['nome']} (R${p['preco']:.2f}) — sem match no YUZER"
@@ -600,9 +677,11 @@ def limpar_planilha(service, spreadsheet_id):
     """
     ranges = [
         'ESTOQUE!I6:I76',
-        'FECHAMENTO CAIXAS!B3:H52',
+        'FECHAMENTO CAIXAS!B3:H32',   # Garçons Volantes
+        'FECHAMENTO CAIXAS!B36:H50',  # Caixas Fixos
+        'FECHAMENTO CAIXAS!B54:H83',  # Garçons
+        'RELATORIO DE VENDA!B5:B76',  # Coluna Sistema
     ]
-    # Limpar ESTOQUE e CAIXAS
     service.spreadsheets().values().batchClear(
         spreadsheetId=spreadsheet_id,
         body={'ranges': ranges}
@@ -740,33 +819,72 @@ def enviar():
             msgs.append(f'PRODUÇÃO col C: {len(prod_updates)} produtos com bônus/cortesia preenchidos')
             for a in prod_avisos: avisos.append(a)
 
-        # ---- Caixas ----
+        # ---- Caixas: separar por tipo de operação ----
+        # Estrutura real da planilha FECHAMENTO CAIXAS:
+        #   L3:L32   = Caixas Volantes (garçons com máquina) → "GARÇOM PIX"
+        #   L36:L50  = Caixas Fixos → "Caixa PIX" (fixos)
+        #   L54:L83  = Garçons (sem máquina) → outros
+        # Colunas: B=Nome, C=N°Máquina/Crachá, D=Total, E=Dinheiro, F=PIX, G=Débito, H=Crédito
         if 'exportacao_caixas' in request.files:
             caixas = parse_caixas(request.files['exportacao_caixas'].read())
-            rows = [[c['usuario'], c['serial'], c['total'],
-                     c['dinheiro'], c['pix'], c['debito'], c['credito']]
-                    for c in caixas]
-            batch.append({
-                'range':  f"FECHAMENTO CAIXAS!B3:H{2 + len(rows)}",
-                'values': rows,
-            })
-            msgs.append(f'FECHAMENTO CAIXAS: {len(rows)} operadores preenchidos')
 
-        # ---- Painel → RESUMO ----
+            def normalizar_op(s):
+                return s.upper().replace('Ç','C').replace('Ã','A').replace('Õ','O').strip()
+
+            def eh_garcom_volante(c):
+                op = normalizar_op(c['operacao'])
+                return 'GARCOM' in op
+
+            def eh_caixa_fixo(c):
+                op = normalizar_op(c['operacao'])
+                return 'CAIXA' in op
+
+            garcons_volantes = [c for c in caixas if eh_garcom_volante(c)]
+            caixas_fixos     = [c for c in caixas if eh_caixa_fixo(c)]
+            outros           = [c for c in caixas if not eh_garcom_volante(c) and not eh_caixa_fixo(c)]
+
+            def to_rows(lista):
+                return [[c['usuario'], c['serial'], c['total'],
+                         c['dinheiro'], c['pix'], c['debito'], c['credito']]
+                        for c in lista]
+
+            # Seção 1 — Garçons Volantes (L3:L32)
+            if garcons_volantes:
+                rows = to_rows(garcons_volantes)
+                batch.append({'range': f"FECHAMENTO CAIXAS!B3:H{2+len(rows)}", 'values': rows})
+                msgs.append(f'FECHAMENTO CAIXAS — Garçons Volantes: {len(rows)}')
+
+            # Seção 2 — Caixas Fixos (L36:L50)
+            if caixas_fixos:
+                rows = to_rows(caixas_fixos)
+                batch.append({'range': f"FECHAMENTO CAIXAS!B36:H{35+len(rows)}", 'values': rows})
+                msgs.append(f'FECHAMENTO CAIXAS — Caixas Fixos: {len(rows)}')
+
+            # Seção 3 — Garçons sem máquina (L54:L83)
+            if outros:
+                rows = to_rows(outros)
+                batch.append({'range': f"FECHAMENTO CAIXAS!B54:H{53+len(rows)}", 'values': rows})
+                msgs.append(f'FECHAMENTO CAIXAS — Garçons: {len(rows)}')
+
+            if not caixas:
+                msgs.append('FECHAMENTO CAIXAS: nenhum operador encontrado')
+
+        # ---- Painel → RESUMO col B (Receita Bar) e col D (Fechamento Caixa) ----
         if 'painel_de_vendas' in request.files:
             painel_data = parse_painel_vendas(request.files['painel_de_vendas'].read())
             fp = painel_data.get('formas_pagamento', {})
-            batch.append({
-                'range': 'RESUMO!B3:B7',
-                'values': [
-                    [0],
-                    [fp.get('CASH', 0)],
-                    [fp.get('CREDIT_CARD', 0)],
-                    [fp.get('DEBIT_CARD', 0)],
-                    [fp.get('PIX', 0)],
-                ],
-            })
-            msgs.append('RESUMO: formas de pagamento preenchidas')
+            vals = [
+                [0],                        # APP
+                [fp.get('CASH', 0)],        # Dinheiro
+                [fp.get('CREDIT_CARD', 0)], # Crédito
+                [fp.get('DEBIT_CARD', 0)],  # Débito
+                [fp.get('PIX', 0)],         # PIX
+            ]
+            # Col B = Receita Bar (totais do sistema)
+            batch.append({'range': 'RESUMO!B3:B7', 'values': vals})
+            # Col D = Fechamento Caixa (mesmos valores — conferência)
+            batch.append({'range': 'RESUMO!D4:D7', 'values': vals[1:]})
+            msgs.append('RESUMO: col B e col D preenchidas (Receita Bar + Fechamento Caixa)')
 
             # ---- VALIDAÇÃO DE TOTAIS ----
             if 'produtos_vendidos' in request.files and agrupado:
