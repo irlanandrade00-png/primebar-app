@@ -47,6 +47,12 @@ MAPA_SUBCAT = {
     'OUTROS':                  'DOSES & OUTROS',
 }
 
+# Produtos do YUZER que vêm com categoria errada mas pertencem a outra cat na planilha
+# Chave = nome do produto YUZER, valor = categoria correta da planilha
+OVERRIDE_CAT = {
+    'GELO SACOLINHA': 'BEBIDAS NAO ALCOOLICAS',
+}
+
 # Categorias e linha inicial no CADASTRO
 CAT_INICIO = {
     'BEBIDAS NAO ALCOOLICAS': 16,
@@ -92,47 +98,72 @@ OFFSET_PRODUCAO = {
 
 # ---------------------------------------------------------------------------
 # Parser: Produtos Vendidos XLSX (Arquivo 1)
+# Cabeçalho dinâmico — busca linha com 'Produto' na col A
+# Usa col 'Quantidade' (após devoluções) e col 'Preço'
 # ---------------------------------------------------------------------------
 
 def parse_produtos_xlsx(file_bytes):
-    """
-    Lê relatório de produtos do YUZER.
-    Coluna H (índice 7) = QUANTIDADE (consumo final após devoluções) — usar esta.
-    Coluna I (índice 8) = PREÇO unitário.
-    """
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     ws = wb.active
     produtos = []
     header_found = False
+    col_map = {}
+
     for row in ws.iter_rows(values_only=True):
-        if row[0] == 'Produto':
-            header_found = True
+        if not header_found:
+            if row[0] == 'Produto':
+                header_found = True
+                col_map = {str(v).strip(): j for j, v in enumerate(row) if v}
             continue
-        if header_found and row[0] is not None:
-            # Pular linhas de total (sem subcategoria ou só números)
-            if not row[3]:
-                continue
-            subcat = str(row[3]).strip().upper() if row[3] else ''
-            cat = MAPA_SUBCAT.get(subcat, 'DOSES & OUTROS')
-            # Col H (idx 7) = quantidade final (após devoluções)
-            # Col I (idx 8) = preço unitário
-            try:
-                qtd = int(float(str(row[7] or 0).replace(',','.')))
-            except Exception:
-                qtd = 0
-            try:
-                preco = round(float(str(row[8] or 0).replace('R$','').replace('.','').replace(',','.')), 2)
-            except Exception:
-                preco = 0.0
-            if qtd <= 0:
-                continue
-            produtos.append({
-                'produto':      str(row[0]).strip(),
-                'subcategoria': subcat,
-                'cat':          cat,
-                'qtd_vendida':  qtd,
-                'preco':        preco,
-            })
+
+        if row[0] is None:
+            continue
+
+        subcat_idx = col_map.get('Subcategoria', 3)
+        if subcat_idx >= len(row) or not row[subcat_idx]:
+            continue
+
+        subcat = str(row[subcat_idx]).strip().upper()
+        cat    = MAPA_SUBCAT.get(subcat, 'DOSES & OUTROS')
+
+        qtd_idx   = col_map.get('Quantidade', 7)
+        preco_idx = col_map.get('Preço', 8)
+
+        try:
+            qtd = int(float(str(row[qtd_idx] or 0).replace(',','.')))
+        except Exception:
+            qtd = 0
+
+        try:
+            v = row[preco_idx]
+            if isinstance(v, (int, float)):
+                preco = round(float(v), 2)
+            else:
+                # String brasileira: "R$ 1.234,56" → remover R$, remover milhar, trocar vírgula
+                s = str(v or 0).replace('R$','').replace(' ','').strip()
+                # Detectar formato: se tem vírgula é BR, se só ponto é EN
+                if ',' in s:
+                    s = s.replace('.','').replace(',','.')
+                preco = round(float(s), 2)
+        except Exception:
+            preco = 0.0
+
+        if qtd <= 0:
+            continue
+
+        nome = str(row[0]).strip()
+        # Corrigir categoria de produtos que o YUZER classifica diferente da planilha
+        if nome in OVERRIDE_CAT:
+            cat = OVERRIDE_CAT[nome]
+
+        produtos.append({
+            'produto':      nome,
+            'subcategoria': subcat,
+            'cat':          cat,
+            'qtd_vendida':  qtd,
+            'preco':        preco,
+        })
+
     return produtos
 
 # ---------------------------------------------------------------------------
@@ -140,8 +171,13 @@ def parse_produtos_xlsx(file_bytes):
 # ---------------------------------------------------------------------------
 
 def _preco_str(s):
-    return round(float(str(s or '0').replace('R$','').replace('\xa0','')
-                       .replace(' ','').replace('.','').replace(',','.')), 2)
+    if isinstance(s, (int, float)):
+        return round(float(s), 2)
+    s = str(s or '0').replace('R$','').replace('\xa0','').strip()
+    if ',' in s:
+        s = s.replace('.','').replace(',','.')
+    try: return round(float(s), 2)
+    except: return 0.0
 
 def _normalizar_subcat(s):
     s = str(s).strip().upper().replace('\n', ' ')
@@ -223,89 +259,74 @@ def parse_bonus_pdf(file_bytes):
 
 # ---------------------------------------------------------------------------
 # Parser: Exportação Caixas XLSX (Arquivo 2)
-# Estrutura real (linha 10 = cabeçalho):
-# Col A=Id, B=Usuário, C=CPF, D=Serial, E=Painel de vendas,
-# F=Operação ("Caixa PIX" ou "GARÇOM PIX"), G=Total, H=Re-impressões
-# Pagamentos vêm nas colunas seguintes (buscar por cabeçalho dinâmico)
+# Cabeçalho dinâmico — busca linha com 'Id' na col A
+# Colunas reais: [0]=Id [1]=Usuário [3]=Serial [5]=Operação [6]=Total
+#                [13]=Crédito [14]=Débito [15]=Pix [16]=Dinheiro
+# NÃO usar col [10] "Dinheiro em caixa" (contagem física ≠ pagamento)
 # ---------------------------------------------------------------------------
 
 def parse_caixas(file_bytes):
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     ws = wb.active
     caixas = []
-    header_row = None
     col_map = {}
+    header_found = False
 
-    for i, row in enumerate(ws.iter_rows(values_only=True), 1):
-        # Encontrar linha de cabeçalho pelo campo "Id"
-        if row[0] == 'Id':
-            header_row = i
-            for j, val in enumerate(row):
-                if val:
-                    col_map[str(val).strip().lower()] = j
+    def norm_key(s):
+        s = str(s).strip().lower()
+        for a, b in [('á','a'),('â','a'),('ã','a'),('é','e'),('ê','e'),
+                     ('í','i'),('ó','o'),('ô','o'),('õ','o'),('ú','u'),('ç','c')]:
+            s = s.replace(a, b)
+        return s
+
+    for row in ws.iter_rows(values_only=True):
+        if not header_found:
+            if row[0] == 'Id':
+                header_found = True
+                col_map = {norm_key(v): j for j, v in enumerate(row) if v}
             continue
 
-        if header_row and row[0] is not None and str(row[0]).strip():
-            # Pular linhas vazias ou de totais
-            if not str(row[0]).strip().startswith('69'):  # IDs começam com hash longo
-                try:
-                    uuid_like = len(str(row[0]).strip()) > 10
-                    if not uuid_like:
-                        continue
-                except:
-                    continue
+        if not row[0] or len(str(row[0]).strip()) < 15:
+            continue
 
-            def get_col(names, default=0):
-                for n in names:
-                    if n in col_map:
-                        v = row[col_map[n]]
-                        try: return round(float(str(v or 0).replace('R$','').replace('.','').replace(',','.')), 2)
-                        except: return default
-                return default
+        def gcol(names, fallback):
+            for n in names:
+                if n in col_map and col_map[n] < len(row):
+                    try: return round(float(str(row[col_map[n]] or 0).replace(',','.').replace('R$','')), 2)
+                    except: pass
+            try: return round(float(row[fallback] or 0), 2)
+            except: return 0.0
 
-            operacao = str(row[col_map.get('operação', col_map.get('operacao', 5))] or '').strip()
-            usuario  = str(row[col_map.get('usuário', col_map.get('usuario', 1))] or '').strip()
-            serial   = str(row[col_map.get('serial', 3)] or '').strip()
+        def scol(names, fallback):
+            for n in names:
+                if n in col_map and col_map[n] < len(row):
+                    return str(row[col_map[n]] or '').strip()
+            return str(row[fallback] or '').strip() if fallback < len(row) else ''
 
-            # Total direto da coluna G (índice 6)
-            try:
-                total = round(float(str(row[6] or 0).replace('R$','').replace('.','').replace(',','.')), 2)
-            except:
-                total = 0.0
+        dinheiro_bruto  = gcol(['dinheiro'], 16)         # col Q = Dinheiro recebido
+        devolvido       = gcol(['total produtos retornados', 'total retornado'], 12)  # col M
 
-            # Formas de pagamento — colunas dinâmicas após col H
-            # Buscar por nome nas colunas do cabeçalho
-            credito  = get_col(['crédito', 'credito', 'credit_card'])
-            debito   = get_col(['débito', 'debito', 'debit_card'])
-            dinheiro = get_col(['dinheiro', 'cash'])
-            pix      = get_col(['pix'])
+        # Dinheiro líquido = Dinheiro recebido - valor devolvido em dinheiro
+        # Usar max(0, ...) para evitar negativo
+        dinheiro_liq = round(max(0.0, dinheiro_bruto - devolvido), 2)
 
-            # Fallback: colunas fixas conhecidas se não encontrar por nome
-            if credito == 0 and debito == 0 and dinheiro == 0 and pix == 0:
-                try: credito  = round(float(row[12] or 0), 2)
-                except: pass
-                try: debito   = round(float(row[13] or 0), 2)
-                except: pass
-                try: dinheiro = round(float(row[14] or 0), 2)
-                except: pass
-                try: pix      = round(float(row[15] or 0), 2)
-                except: pass
-
-            caixas.append({
-                'usuario':  usuario,
-                'serial':   serial,
-                'operacao': operacao,
-                'total':    total,
-                'credito':  credito,
-                'debito':   debito,
-                'dinheiro': dinheiro,
-                'pix':      pix,
-            })
+        caixas.append({
+            'usuario':  scol(['usuario'], 1),
+            'serial':   scol(['serial'], 3),
+            'operacao': scol(['operacao'], 5),
+            'total':    gcol(['total'], 6),
+            'credito':  gcol(['credito'], 13),
+            'debito':   gcol(['debito'], 14),
+            'pix':      gcol(['pix'], 15),
+            'dinheiro': dinheiro_liq,   # líquido após devoluções
+        })
 
     return caixas
 
 # ---------------------------------------------------------------------------
 # Parser: Painel de Vendas XLSX (Arquivo 3)
+# Lê Total geral e as 4 formas principais: PIX, DEBIT_CARD, CREDIT_CARD, CASH
+# NÃO soma sub-bandeiras (Maestro, Visa, etc.) — são sub-totais de DEBIT/CREDIT
 # ---------------------------------------------------------------------------
 
 def parse_painel_vendas(file_bytes):
@@ -316,6 +337,8 @@ def parse_painel_vendas(file_bytes):
     lendo_formas = False
     passou_operacoes = False
 
+    FORMAS_PRINCIPAIS = {'PIX', 'DEBIT_CARD', 'CREDIT_CARD', 'CASH', 'APP', 'CASHLESS'}
+
     for row in ws.iter_rows(values_only=True):
         if row[0] is None:
             continue
@@ -325,14 +348,22 @@ def parse_painel_vendas(file_bytes):
         if key == 'Formas de Pagamento':
             lendo_formas = True
             continue
-        if key in ('Operacoes', 'Operações'):
+
+        # Parar ao encontrar sub-bandeiras ou Operações
+        if key.startswith('Total por bandeira') or key in ('Operacoes', 'Operações'):
             lendo_formas = False
-            passou_operacoes = True
+            if 'Opera' in key:
+                passou_operacoes = True
             continue
-        if lendo_formas and val is not None:
-            formas[key] = val
+
+        # Ler só formas principais — ignorar Maestro, Visa, Elo, etc.
+        if lendo_formas and val is not None and key in FORMAS_PRINCIPAIS:
+            try: formas[key] = round(float(val or 0), 2)
+            except: pass
             continue
-        if not passou_operacoes and key in ('Total', 'Pedidos', 'Media', 'Média', 'Ticket'):
+
+        # Métricas gerais (Total, Pedidos, Ticket médio)
+        if not passou_operacoes and key in ('Total', 'Pedidos', 'Média', 'Media', 'Ticket'):
             if key not in painel:
                 painel[key] = val
 
@@ -412,20 +443,62 @@ def ler_mapa_linhas(service, spreadsheet_id):
 # Palavras irrelevantes para comparação (unidades, tamanhos, etc.)
 STOP_WORDS = {
     'ml', 'l', 'lt', 'kg', 'g', 'un', 'und', 'cx', 'cx.',
-    '250', '269', '330', '350', '355', '473', '500', '600',
-    '750', '1l', '1lt', '1000',
+    '100','130','150','160','180','200','220','250','260','269',
+    '280','290','300','320','330','340','350','355','360','370',
+    '380','410','430','440','473','500','550','600','750','1l','1lt','1000',
     'com', 'de', 'do', 'da', 'e', 'em', 'para', 'o', 'a',
-    'garrafa', 'lata', 'long', 'neck',
+    'garrafa', 'lata', 'long', 'neck', 'anos', 'final', 'bebidas',
+    'drink', 'dose', 'doses', 'combo',
+}
+
+# Alias de nomes comuns YUZER → forma normalizada
+ALIAS = {
+    'redbull': 'red bull',
+    'redbuul': 'red bull',
+    'red buul': 'red bull',
+    'aguasemgas': 'agua sem gas',
+    'aguacomgas': 'agua com gas',
+    'aguatonica': 'agua tonica',
+    'aguadecoco': 'agua coco',
+    'aguadecoco': 'agua coco',
+    'oldpar': 'old parr',
+    'oldparr': 'old parr',
+    'goldlabel': 'gold label',
+    'redlabel': 'red label',
+    'ketelone': 'ketel one',
+    'tanqueray': 'tanqueray',
+    'smirnoff': 'smirnoff',
+    'heineken': 'heineken',
+    'amstel': 'amstel',
+    'budweiser': 'budweiser',
+    'ciroc': 'ciroc',
+    'tropical': 'tropical',
+    'melancia': 'melancia',
+    'sugarfree': 'sugar free',
+    'energy': 'energy',
+    'buul': 'bull',
+    'moscow': 'moscow',
+    'mule': 'mule',
+    'lemonade': 'limonada',
+    'limonade': 'limonada',
+    'pink': 'pink',
+    'gija': 'gija',
+    'tonica': 'tonica',
+    'vodka': 'vodka',
+    'gin': 'gin',
+    'whisky': 'whisky',
+    'whiskey': 'whisky',
+    'whisk': 'whisky',
 }
 
 def _normalizar(nome):
-    """Remove acentos, lowercase, elimina stop words e pontuação."""
-    # Remove acentos
+    """Remove acentos, lowercase, aplica aliases, elimina stop words."""
     nome = unicodedata.normalize('NFKD', nome)
     nome = ''.join(c for c in nome if not unicodedata.combining(c))
-    # Lowercase e remover pontuação
     nome = re.sub(r'[^a-z0-9 ]', ' ', nome.lower())
-    # Tokens sem stop words
+    # Aplicar aliases
+    for alias, padrao in ALIAS.items():
+        nome = re.sub(r'\b' + alias + r'\b', padrao, nome)
     tokens = [t for t in nome.split() if t not in STOP_WORDS and len(t) > 1]
     return ' '.join(tokens)
 
@@ -436,7 +509,7 @@ def _similaridade(a, b):
         return 0.0
     return difflib.SequenceMatcher(None, na, nb).ratio()
 
-def _melhor_match(nome_planilha, candidatos, usados, limiar=0.35):
+def _melhor_match(nome_planilha, candidatos, usados, limiar=0.28):
     """
     Dentre os candidatos do YUZER (mesmo preço, mesma cat),
     retorna o mais similar ao nome da planilha que ainda não foi usado.
@@ -457,7 +530,7 @@ def _melhor_match(nome_planilha, candidatos, usados, limiar=0.35):
 # Conciliação por PREÇO + SIMILARIDADE DE NOME
 # ---------------------------------------------------------------------------
 
-LIMIAR_SIMILARIDADE = 0.35  # Score mínimo para aceitar o match
+LIMIAR_SIMILARIDADE = 0.28  # Score mínimo para aceitar o match
 
 def conciliar(catalogo, vendas, bonus):
     """
@@ -651,7 +724,19 @@ def preview():
 # Mapeamento fixo YUZER → Planilha (salvo em memória do servidor)
 # Estrutura: { "Nome YUZER": "Nome Planilha", ... }
 # ---------------------------------------------------------------------------
-_mapeamento_store = {}
+_mapeamento_store = {
+    # Drinks (todos R$35 — mapeamento fixo evita troca por posição)
+    'DRINK Tropical Gin':    'TROPICAL GIN ( GIN + RODELA DE LARANJA E RED BUUL TROPICAL )',
+    'DRINK Melancita':       'MELANCITA ( GIN + RODELA DE LIMÃO E RED BUUL MELANCIA )',
+    'DRINK Moscow Mule':     'MOSCOW MULLE ( VODKA + XAROPE DE GENGIBRE + SUMO DE LIMÃO E ESPUMA CITRICA )',
+    'DRINK Pink Limonade':   'PINK LEMONADE ( GIN +  SUCO DE  LIMÃO + GROSELHA E RODELA DE LIMÃO SICILIANO)',
+    'DRINK Gija':            'GIJA ( GIN + TONICA + XAROPE DE GENGIBRE + CANELA E RODELA DE LIMÃO SICILIANO )',
+    'DRINK Gin Tônica':      'GIN TONICA ( GIN + TONICA E RODELA DE LIMÃO )',
+    'DRINK Vodka + Red Bull':'VODKA E RED BUUL (VODKA + RED BUUL + ESCOLHA SEU SABOR )',
+    # Combos R$440
+    'Old Parr+3 Red Bull':       'OLDPAR 12 ANOS 1L  + 3 REDBULL 250ML',
+    'Old Parr+5 Águas de Coco':  'OLDPARR 12 ANOS 1L + 5 AGUA DE COCO',
+}
 
 @app.route('/api/mapeamento', methods=['GET'])
 def get_mapeamento():
@@ -676,10 +761,10 @@ def limpar_planilha(service, spreadsheet_id):
     Limpa cada aba individualmente para evitar erro com acentos na API.
     """
     ranges = [
+        'RESUMO!B3:B9',               # Receita Bar (col D é fórmula — não limpar)
         'ESTOQUE!I6:I76',
-        'FECHAMENTO CAIXAS!B3:H32',   # Garçons Volantes
-        'FECHAMENTO CAIXAS!B36:H50',  # Caixas Fixos
-        'FECHAMENTO CAIXAS!B54:H83',  # Garçons
+        'FECHAMENTO CAIXAS!B3:H32',   # Caixas PIX
+        'FECHAMENTO CAIXAS!B54:H83',  # Garçons PIX
         'RELATORIO DE VENDA!B5:B76',  # Coluna Sistema
     ]
     service.spreadsheets().values().batchClear(
@@ -819,72 +904,61 @@ def enviar():
             msgs.append(f'PRODUÇÃO col C: {len(prod_updates)} produtos com bônus/cortesia preenchidos')
             for a in prod_avisos: avisos.append(a)
 
-        # ---- Caixas: separar por tipo de operação ----
-        # Estrutura real da planilha FECHAMENTO CAIXAS:
-        #   L3:L32   = Caixas Volantes (garçons com máquina) → "GARÇOM PIX"
-        #   L36:L50  = Caixas Fixos → "Caixa PIX" (fixos)
-        #   L54:L83  = Garçons (sem máquina) → outros
-        # Colunas: B=Nome, C=N°Máquina/Crachá, D=Total, E=Dinheiro, F=PIX, G=Débito, H=Crédito
+        # ---- Caixas — estrutura FECHAMENTO CAIXAS (confirmada na planilha manual) ----
+        # L3:L32  → "N° DA MAQUINA" = GARÇOM PIX (garçons com máquina)
+        # L36:L50 → "CAIXAS FIXOS"  = Caixa PIX  (caixas fixos)
+        # L54:L83 → "N° CRACHA"     = garçons sem máquina (vazio neste fluxo)
+        # Colunas: B=Nome C=Serial/Crachá D=Total E=Dinheiro F=PIX G=Débito H=Crédito
         if 'exportacao_caixas' in request.files:
             caixas = parse_caixas(request.files['exportacao_caixas'].read())
 
-            def normalizar_op(s):
-                return s.upper().replace('Ç','C').replace('Ã','A').replace('Õ','O').strip()
+            def op_norm(s):
+                return str(s).upper().replace('Ç','C').replace('Ã','A').strip()
 
-            def eh_garcom_volante(c):
-                op = normalizar_op(c['operacao'])
-                return 'GARCOM' in op
-
-            def eh_caixa_fixo(c):
-                op = normalizar_op(c['operacao'])
-                return 'CAIXA' in op
-
-            garcons_volantes = [c for c in caixas if eh_garcom_volante(c)]
-            caixas_fixos     = [c for c in caixas if eh_caixa_fixo(c)]
-            outros           = [c for c in caixas if not eh_garcom_volante(c) and not eh_caixa_fixo(c)]
+            caixas_pix  = [c for c in caixas if 'CAIXA' in op_norm(c['operacao'])]
+            garcons_pix = [c for c in caixas if 'GARCOM' in op_norm(c['operacao']) or 'GARÇOM' in op_norm(c['operacao'])]
 
             def to_rows(lista):
                 return [[c['usuario'], c['serial'], c['total'],
                          c['dinheiro'], c['pix'], c['debito'], c['credito']]
                         for c in lista]
 
-            # Seção 1 — Garçons Volantes (L3:L32)
-            if garcons_volantes:
-                rows = to_rows(garcons_volantes)
+            # Seção topo (L3:L32) → GARÇOM PIX
+            if garcons_pix:
+                rows = to_rows(garcons_pix)
                 batch.append({'range': f"FECHAMENTO CAIXAS!B3:H{2+len(rows)}", 'values': rows})
-                msgs.append(f'FECHAMENTO CAIXAS — Garçons Volantes: {len(rows)}')
+                msgs.append(f'FECHAMENTO CAIXAS — Garçons: {len(rows)} operadores')
 
-            # Seção 2 — Caixas Fixos (L36:L50)
-            if caixas_fixos:
-                rows = to_rows(caixas_fixos)
+            # Seção meio (L36:L50) → Caixa PIX
+            if caixas_pix:
+                rows = to_rows(caixas_pix)
                 batch.append({'range': f"FECHAMENTO CAIXAS!B36:H{35+len(rows)}", 'values': rows})
-                msgs.append(f'FECHAMENTO CAIXAS — Caixas Fixos: {len(rows)}')
-
-            # Seção 3 — Garçons sem máquina (L54:L83)
-            if outros:
-                rows = to_rows(outros)
-                batch.append({'range': f"FECHAMENTO CAIXAS!B54:H{53+len(rows)}", 'values': rows})
-                msgs.append(f'FECHAMENTO CAIXAS — Garçons: {len(rows)}')
+                msgs.append(f'FECHAMENTO CAIXAS — Caixas: {len(rows)} operadores')
 
             if not caixas:
                 msgs.append('FECHAMENTO CAIXAS: nenhum operador encontrado')
 
-        # ---- Painel → RESUMO col B (Receita Bar) e col D (Fechamento Caixa) ----
+        # ---- Painel → RESUMO col B (B3:B9) ----
+        # Col D é preenchida via fórmula da aba FECHAMENTO CAIXAS — não preencher aqui
         if 'painel_de_vendas' in request.files:
             painel_data = parse_painel_vendas(request.files['painel_de_vendas'].read())
             fp = painel_data.get('formas_pagamento', {})
-            vals = [
-                [0],                        # APP
-                [fp.get('CASH', 0)],        # Dinheiro
-                [fp.get('CREDIT_CARD', 0)], # Crédito
-                [fp.get('DEBIT_CARD', 0)],  # Débito
-                [fp.get('PIX', 0)],         # PIX
-            ]
-            # Col B = Receita Bar (totais do sistema)
-            batch.append({'range': 'RESUMO!B3:B7', 'values': vals})
-            # Col D = Fechamento Caixa (mesmos valores — conferência)
-            batch.append({'range': 'RESUMO!D4:D7', 'values': vals[1:]})
-            msgs.append('RESUMO: col B e col D preenchidas (Receita Bar + Fechamento Caixa)')
+            batch.append({
+                'range': 'RESUMO!B3:B9',
+                'values': [
+                    [0],                        # B3 APP
+                    [fp.get('CASH', 0)],        # B4 Dinheiro
+                    [fp.get('CREDIT_CARD', 0)], # B5 Crédito
+                    [fp.get('DEBIT_CARD', 0)],  # B6 Débito
+                    [fp.get('PIX', 0)],         # B7 PIX
+                    [0],                        # B8 Cancelamento
+                    [fp.get('CASH', 0) +        # B9 Receita Total
+                     fp.get('CREDIT_CARD', 0) +
+                     fp.get('DEBIT_CARD', 0) +
+                     fp.get('PIX', 0)],
+                ],
+            })
+            msgs.append('RESUMO col B (B3:B9): formas de pagamento preenchidas')
 
             # ---- VALIDAÇÃO DE TOTAIS ----
             if 'produtos_vendidos' in request.files and agrupado:
