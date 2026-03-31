@@ -437,111 +437,110 @@ def ler_mapa_linhas(service, spreadsheet_id):
     return est_map, prod_map
 
 # ---------------------------------------------------------------------------
-# Utilitários de similaridade de nome
+# Motor de Conciliação Multi-Atributo
+# Usa: categoria + preço + nome (sequência + tokens) + unidade de medida
+# Algoritmo: pré-match global greedy por score descendente
 # ---------------------------------------------------------------------------
 
-# Palavras irrelevantes para comparação (unidades, tamanhos, etc.)
 STOP_WORDS = {
-    'ml', 'l', 'lt', 'kg', 'g', 'un', 'und', 'cx', 'cx.',
+    'ml','l','lt','kg','g','un','und','cx',
     '100','130','150','160','180','200','220','250','260','269',
     '280','290','300','320','330','340','350','355','360','370',
-    '380','410','430','440','473','500','550','600','750','1l','1lt','1000',
-    'com', 'de', 'do', 'da', 'e', 'em', 'para', 'o', 'a',
-    'garrafa', 'lata', 'long', 'neck', 'anos', 'final', 'bebidas',
-    'drink', 'dose', 'doses', 'combo',
+    '380','410','430','440','473','500','550','600','750','1000',
+    'com','de','do','da','e','em','para','o','a','os','as',
+    'final','bebidas','drink','dose','doses','combo','outros',
+    'garrafa','lata','long','neck','anos',
+    '1','2','3','4','5','6','7','8','9','10',
 }
 
-# Alias de nomes comuns YUZER → forma normalizada
 ALIAS = {
-    'redbull': 'red bull',
-    'redbuul': 'red bull',
-    'red buul': 'red bull',
-    'aguasemgas': 'agua sem gas',
-    'aguacomgas': 'agua com gas',
-    'aguatonica': 'agua tonica',
-    'aguadecoco': 'agua coco',
-    'aguadecoco': 'agua coco',
-    'oldpar': 'old parr',
-    'oldparr': 'old parr',
-    'goldlabel': 'gold label',
-    'redlabel': 'red label',
-    'ketelone': 'ketel one',
-    'tanqueray': 'tanqueray',
-    'smirnoff': 'smirnoff',
-    'heineken': 'heineken',
-    'amstel': 'amstel',
-    'budweiser': 'budweiser',
-    'ciroc': 'ciroc',
-    'tropical': 'tropical',
-    'melancia': 'melancia',
-    'sugarfree': 'sugar free',
-    'energy': 'energy',
-    'buul': 'bull',
-    'moscow': 'moscow',
-    'mule': 'mule',
-    'lemonade': 'limonada',
-    'limonade': 'limonada',
-    'pink': 'pink',
-    'gija': 'gija',
-    'tonica': 'tonica',
-    'vodka': 'vodka',
-    'gin': 'gin',
-    'whisky': 'whisky',
-    'whiskey': 'whisky',
-    'whisk': 'whisky',
+    'buul': 'bull', 'redbull': 'red bull', 'redbuul': 'red bull',
+    'oldpar': 'old parr', 'oldparr': 'old parr',
+    'tanqueray': 'tanqueray', 'tanquery': 'tanqueray',
+    'moscow': 'moscow', 'mulle': 'mule',
+    'limonade': 'lemonade', 'limao': 'limao', 'gengibre': 'gengibre',
+    'tonica': 'tonica', 'tonicas': 'tonica',
+    'smirnoff': 'smirnoff', 'heineken': 'heineken', 'amstel': 'amstel',
+    'budweiser': 'budweiser', 'ciroc': 'ciroc', 'ketel': 'ketel',
 }
 
-def _normalizar(nome):
-    """Remove acentos, lowercase, aplica aliases, elimina stop words."""
-    nome = unicodedata.normalize('NFKD', nome)
-    nome = ''.join(c for c in nome if not unicodedata.combining(c))
-    nome = re.sub(r'[^a-z0-9 ]', ' ', nome.lower())
-    # Aplicar aliases
-    for alias, padrao in ALIAS.items():
-        nome = re.sub(r'\b' + alias + r'\b', padrao, nome)
-    tokens = [t for t in nome.split() if t not in STOP_WORDS and len(t) > 1]
-    return ' '.join(tokens)
+def _norm_str(s):
+    """Remove acentos, lowercase, aplica aliases."""
+    s = unicodedata.normalize('NFKD', str(s))
+    s = ''.join(c for c in s if not unicodedata.combining(c))
+    s = re.sub(r'[^a-z0-9 ]', ' ', s.lower())
+    for a, b in ALIAS.items():
+        s = re.sub(r'\b' + a + r'\b', b, s)
+    return s
+
+def _tokens(nome):
+    """Tokens significativos sem stop words."""
+    return set(t for t in _norm_str(nome).split() if t not in STOP_WORDS and len(t) > 1)
+
+def _extrair_ml(nome):
+    """Extrai volume em ml (ex: 350ml → 350, 1l → 1000)."""
+    m = re.search(r'(\d+\.?\d*)\s*(ml|l|lt)\b', nome.lower().replace(' ',''))
+    if m:
+        val = float(m.group(1))
+        return val * 1000 if m.group(2) in ('l','lt') else val
+    return None
+
+def _score_par(nome_p, preco_p, nome_y, preco_y):
+    """
+    Score 0-1 combinando:
+    - Preço: 35% — exact match = 1.0, cai linearmente com diferença %
+    - Nome:  45% — 60% sequência + 40% interseção de tokens
+    - Unidade: 20% — match exato de ML, neutro se ausente
+    """
+    # Preço
+    if preco_p > 0 and preco_y > 0:
+        if abs(preco_p - preco_y) < 0.01:
+            s_preco = 1.0
+        else:
+            diff_pct = abs(preco_p - preco_y) / max(preco_p, preco_y)
+            s_preco = max(0.0, 1.0 - diff_pct * 3)
+    else:
+        s_preco = 0.0
+
+    # Nome: sequência + tokens
+    np_norm, ny_norm = _norm_str(nome_p), _norm_str(nome_y)
+    s_seq = difflib.SequenceMatcher(None, np_norm, ny_norm).ratio()
+    tp, ty = _tokens(nome_p), _tokens(nome_y)
+    s_tok = len(tp & ty) / len(tp | ty) if (tp and ty) else 0.0
+    s_nome = s_seq * 0.6 + s_tok * 0.4
+
+    # Unidade de medida
+    ml_p, ml_y = _extrair_ml(nome_p), _extrair_ml(nome_y)
+    if ml_p is not None and ml_y is not None:
+        s_un = 1.0 if abs(ml_p - ml_y) < 1 else 0.0
+    else:
+        s_un = 0.5  # sem info = neutro
+
+    return s_preco * 0.35 + s_nome * 0.45 + s_un * 0.20
 
 def _similaridade(a, b):
-    """Retorna score 0.0–1.0 entre dois nomes normalizados."""
-    na, nb = _normalizar(a), _normalizar(b)
-    if not na or not nb:
-        return 0.0
-    return difflib.SequenceMatcher(None, na, nb).ratio()
+    """Compatibilidade com código legado."""
+    return _score_par(a, 0, b, 0)
 
-def _melhor_match(nome_planilha, candidatos, usados, limiar=0.28):
-    """
-    Dentre os candidatos do YUZER (mesmo preço, mesma cat),
-    retorna o mais similar ao nome da planilha que ainda não foi usado.
-    Retorna (candidato, score) ou (None, 0) se nenhum passar o limiar.
-    """
-    melhor, melhor_score = None, 0.0
-    for c in candidatos:
-        if id(c) in usados:
-            continue
-        score = _similaridade(nome_planilha, c['produto'])
-        if score > melhor_score:
-            melhor, melhor_score = c, score
-    if melhor_score >= limiar:
-        return melhor, melhor_score
-    return None, 0.0
+def _normalizar(nome):
+    """Compatibilidade com código legado."""
+    return _norm_str(nome)
 
 # ---------------------------------------------------------------------------
-# Conciliação por PREÇO + SIMILARIDADE DE NOME
+# Conciliação por Pré-Match Global (greedy por score descendente)
+# Garante que cada produto YUZER é usado no máximo uma vez
 # ---------------------------------------------------------------------------
 
-LIMIAR_SIMILARIDADE = 0.28  # Score mínimo para aceitar o match
+LIMIAR_SCORE = 0.40
 
 def conciliar(catalogo, vendas, bonus):
     """
-    Para cada produto da planilha (CADASTRO):
-      1. Filtra candidatos do YUZER com o mesmo preço e categoria
-      2. Escolhe o candidato com maior similaridade de nome
-      3. Se score < LIMIAR, marca como não conciliado
+    Para cada categoria, constrói matriz de scores (planilha × YUZER),
+    ordena por score descendente e faz atribuição greedy.
     Retorna: {cat: [{nome, linha_cadastro, preco,
                      qtd_venda, qtd_bonus, qtd_sistema,
                      match_venda, score_venda,
-                     match_bonus, score_bonus}, ...]}
+                     match_bonus, score_bonus, conciliado}]}
     """
     agrupado = {cat: [] for cat in CAT_INICIO}
 
@@ -549,67 +548,59 @@ def conciliar(catalogo, vendas, bonus):
         v_cat = [p for p in vendas if p['cat'] == cat]
         b_cat = [p for p in bonus  if p['cat'] == cat]
 
-        # Agrupar por preço
-        def por_preco(lista):
-            d = {}
-            for p in lista:
-                d.setdefault(p['preco'], []).append(p)
-            return d
+        def pre_match(planilha_items, yuzer_items):
+            """Pré-match global: retorna dict {idx_plan: (idx_yuzer, nome_yuzer, score)}"""
+            if not planilha_items or not yuzer_items:
+                return {}
 
-        v_map = por_preco(v_cat)
-        b_map = por_preco(b_cat)
+            # Construir todos os pares acima do limiar
+            pares = []
+            for pi, item in enumerate(planilha_items):
+                for yi, prod in enumerate(yuzer_items):
+                    s = _score_par(item['nome'], item['preco'],
+                                   prod['produto'], prod['preco'])
+                    if s >= LIMIAR_SCORE:
+                        pares.append((s, pi, yi))
 
-        # Rastrear candidatos já usados (por id do objeto)
-        v_usados = set()
-        b_usados = set()
+            # Greedy: atribuir melhor score primeiro
+            pares.sort(reverse=True)
+            plan_usado = set()
+            yuzer_usado = set()
+            resultado = {}
+            for s, pi, yi in pares:
+                if pi not in plan_usado and yi not in yuzer_usado:
+                    resultado[pi] = (yi, yuzer_items[yi]['produto'], s,
+                                     yuzer_items[yi]['qtd_vendida'])
+                    plan_usado.add(pi)
+                    yuzer_usado.add(yi)
+            return resultado
 
-        for item in itens:
-            preco = item['preco']
-            nome  = item['nome']
+        match_v = pre_match(itens, v_cat)
+        match_b = pre_match(itens, b_cat)
 
-            # --- Vendas ---
-            v_candidatos = v_map.get(preco, [])
-            if len(v_candidatos) == 1:
-                # Preço único na categoria: match direto
-                v = v_candidatos[0] if id(v_candidatos[0]) not in v_usados else None
-                score_v = 1.0 if v else 0.0
-            else:
-                # Múltiplos com mesmo preço: usar similaridade
-                v, score_v = _melhor_match(nome, v_candidatos, v_usados)
+        for pi, item in enumerate(itens):
+            mv = match_v.get(pi)
+            mb = match_b.get(pi)
 
-            if v:
-                v_usados.add(id(v))
-
-            # --- Bônus ---
-            b_candidatos = b_map.get(preco, [])
-            if len(b_candidatos) == 1:
-                b = b_candidatos[0] if id(b_candidatos[0]) not in b_usados else None
-                score_b = 1.0 if b else 0.0
-            else:
-                b, score_b = _melhor_match(nome, b_candidatos, b_usados)
-
-            if b:
-                b_usados.add(id(b))
-
-            qtd_venda = v['qtd_vendida'] if v else 0
-            qtd_bonus = b['qtd_vendida'] if b else 0
+            qtd_venda = mv[3] if mv else 0
+            qtd_bonus = mb[3] if mb else 0
 
             agrupado[cat].append({
-                'nome':           nome,
+                'nome':           item['nome'],
                 'linha_cadastro': item['linha_cadastro'],
-                'preco':          preco,
+                'preco':          item['preco'],
                 'qtd_venda':      qtd_venda,
                 'qtd_bonus':      qtd_bonus,
                 'qtd_sistema':    qtd_venda + qtd_bonus,
-                # Info de conciliação para o painel
-                'match_venda':    v['produto'] if v else None,
-                'score_venda':    round(score_v, 2),
-                'match_bonus':    b['produto'] if b else None,
-                'score_bonus':    round(score_b, 2),
-                'conciliado':     v is not None or b is not None,
+                'match_venda':    mv[1] if mv else None,
+                'score_venda':    mv[2] if mv else 0.0,
+                'match_bonus':    mb[1] if mb else None,
+                'score_bonus':    mb[2] if mb else 0.0,
+                'conciliado':     mv is not None or mb is not None,
             })
 
     return agrupado
+
 
 # ---------------------------------------------------------------------------
 # Builders Google Sheets — usando mapa de linhas real das abas
