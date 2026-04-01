@@ -627,25 +627,40 @@ def build_estoque_updates(agrupado, est_map=None):
 def build_producao_updates(agrupado, prod_map=None):
     """
     PRODUÇÃO col C = qtd_bonus (só onde bonus > 0).
-    Usa linha_cadastro + OFFSET_PRODUCAO por categoria.
-    Retorna (updates, avisos_baixo_score).
+    Usa prod_map (nome→linha) lido diretamente da planilha Google.
+    O prod_map é construído em ler_mapa_linhas() e passado pelo enviar().
+    Retorna (updates, avisos).
     """
     updates = []
-    avisos_score = []
+    avisos  = []
+
     for cat, prods in agrupado.items():
-        offset = OFFSET_PRODUCAO.get(cat, -10)
         for p in prods:
-            if p['qtd_bonus'] > 0:
-                linha = p['linha_cadastro'] + offset
+            if p['qtd_bonus'] <= 0:
+                continue
+
+            nome  = p['nome']
+            linha = None
+
+            # 1. Usar prod_map se disponível (nome → linha real na planilha)
+            if prod_map and nome in prod_map:
+                linha = prod_map[nome]
+
+            # 2. Fallback: calcular pelo offset (menos preciso)
+            if linha is None:
+                offset = OFFSET_PRODUCAO.get(cat, -10)
+                linha  = p['linha_cadastro'] + offset
+
+            if linha and linha > 0:
                 updates.append({'range': f"PRODUÇÃO!C{linha}", 'values': [[p['qtd_bonus']]]})
-                # Avisar se score de similaridade foi baixo
-                score = p.get('score_bonus', 1.0)
-                if score < 0.6 and p.get('match_bonus'):
-                    avisos_score.append(
-                        f"Bônus: '{p['nome']}' conciliado com '{p['match_bonus']}' "
-                        f"(similaridade {int(score*100)}%) — confira"
-                    )
-    return updates, avisos_score
+
+            score = p.get('score_bonus', 1.0)
+            if score < 0.5 and p.get('match_bonus'):
+                avisos.append(
+                    f"Bônus incerto: '{nome}' → '{p['match_bonus']}' ({int(score*100)}%) — verifique"
+                )
+
+    return updates, avisos
 
 # ---------------------------------------------------------------------------
 # Rotas
@@ -752,11 +767,13 @@ def limpar_planilha(service, spreadsheet_id):
     Limpa cada aba individualmente para evitar erro com acentos na API.
     """
     ranges = [
-        'RESUMO!B3:B9',               # Receita Bar (col D é fórmula — não limpar)
-        'ESTOQUE!I6:I76',
-        'FECHAMENTO CAIXAS!B3:H32',   # Caixas PIX
-        'FECHAMENTO CAIXAS!B54:H83',  # Garçons PIX
-        'RELATORIO DE VENDA!B5:B76',  # Coluna Sistema
+        'RESUMO!B3:B9',               # Receita Bar
+        'ESTOQUE!I6:I76',             # Consumo Sistema
+        'PRODUÇÃO!C5:C77',            # Espelho Bonus
+        'FECHAMENTO CAIXAS!B3:H32',   # Garçom PIX
+        'FECHAMENTO CAIXAS!B36:H50',  # Caixas Fixos
+        'FECHAMENTO CAIXAS!B54:H83',  # Garçons crachá
+        # RELATORIO DE VENDA — NÃO limpar: tem fórmulas que puxam de ESTOQUE/PRODUÇÃO
     ]
     service.spreadsheets().values().batchClear(
         spreadsheetId=spreadsheet_id,
@@ -863,6 +880,10 @@ def enviar():
             total_cat = sum(len(v) for v in catalogo.values())
             msgs.append(f'CADASTRO: {total_cat} produtos lidos')
 
+            # Ler mapa de linhas reais de PRODUÇÃO (nome → linha)
+            _, prod_map_real = ler_mapa_linhas(service, spreadsheet_id)
+            msgs.append(f'PRODUÇÃO: {len(prod_map_real)} produtos mapeados')
+
             # Conciliar por preço + similaridade de nome
             agrupado = conciliar(catalogo, vendas, bonus)
 
@@ -890,7 +911,7 @@ def enviar():
             for a in est_nf: avisos.append(a)
 
             # PRODUÇÃO col C
-            prod_updates, prod_avisos = build_producao_updates(agrupado)
+            prod_updates, prod_avisos = build_producao_updates(agrupado, prod_map_real)
             batch.extend(prod_updates)
             msgs.append(f'PRODUÇÃO col C: {len(prod_updates)} produtos com bônus/cortesia preenchidos')
             for a in prod_avisos: avisos.append(a)
