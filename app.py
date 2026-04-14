@@ -80,7 +80,7 @@ OFFSET_PRODUCAO = {
 }
 
 LIMITE_GARCONS = 30
-LIMITE_CAIXAS  = 15
+LIMITE_VOLANTES  = 15
 
 # Variantes de nomes de abas para auto-detecção (Ponto 6)
 VARIANTES_ABAS = {
@@ -843,8 +843,9 @@ def limpar_planilha(service, spreadsheet_id, abas_mapa):
     ranges_base = [
         f'{nome_res}!B3:B9',
         f'{nome_est}!I6:I76',
-        f'{nome_cx}!B3:H32',
-        f'{nome_cx}!B36:H50',
+        f'{nome_cx}!B3:H32',    # Garçons PIX
+        f'{nome_cx}!B36:H50',   # Caixas Volantes
+        f'{nome_cx}!B54:H83',   # Caixas Fixos/PDV
     ]
     service.spreadsheets().values().batchClear(
         spreadsheetId=spreadsheet_id,
@@ -1285,34 +1286,53 @@ def enviar():
                 s = unicodedata.normalize('NFKD', str(s).upper())
                 return ''.join(c for c in s if not unicodedata.combining(c))
 
-            garcons_pix = [c for c in caixas if 'GARCOM' in op_norm(c['operacao'])]
-            caixas_pix  = [c for c in caixas if 'CAIXA'  in op_norm(c['operacao'])]
-            nome_cx     = aba(abas_mapa, 'FECHAMENTO CAIXAS')
+            # Separação correta dos 3 tipos de operador do YUZER:
+            # GARÇOM PIX   → Bloco 1 (L3:L32)   — garçons com máquina
+            # Caixa PIX    → Bloco 2 (L36:L50)  — caixas volantes (PDV móvel)
+            # CAIXA FIXO   → Bloco 3 (L54:L83)  — PDV fixo (alimentação, bar fixo, etc.)
+            garcons   = [c for c in caixas if 'GARCOM' in op_norm(c['operacao'])]
+            volantes  = [c for c in caixas if 'CAIXA'  in op_norm(c['operacao'])
+                                           and 'FIXO'  not in op_norm(c['operacao'])]
+            fixos     = [c for c in caixas if 'FIXO'   in op_norm(c['operacao'])]
+            nome_cx   = aba(abas_mapa, 'FECHAMENTO CAIXAS')
 
             def to_rows(lista):
                 return [[c['usuario'], c['serial'], c['total'],
                          c['dinheiro'], c['pix'], c['debito'], c['credito']]
                         for c in lista]
 
-            if garcons_pix:
-                rows = to_rows(garcons_pix)
+            # Bloco 1 — Garçons PIX (L3:L32)
+            if garcons:
+                rows = to_rows(garcons)
                 if len(rows) > LIMITE_GARCONS:
                     avisos.append(
-                        f'⚠️ {len(rows)} garçons — planilha tem {LIMITE_GARCONS} linhas na seção '
+                        f'⚠️ {len(rows)} garçons — planilha tem {LIMITE_GARCONS} linhas '
                         f'(L3:L32). Adicione {len(rows)-LIMITE_GARCONS} linha(s) antes de L33.'
                     )
                 batch.append({'range': f"{nome_cx}!B3:H{2+len(rows)}", 'values': rows})
-                msgs.append(f'Garçons PIX: {len(rows)}')
+                msgs.append(f'FECHAMENTO CAIXAS — Garçons PIX: {len(rows)}')
 
-            if caixas_pix:
-                rows = to_rows(caixas_pix)
-                if len(rows) > LIMITE_CAIXAS:
+            # Bloco 2 — Caixas Volantes (L36:L50)
+            if volantes:
+                rows = to_rows(volantes)
+                if len(rows) > LIMITE_VOLANTES:
                     avisos.append(
-                        f'⚠️ {len(rows)} caixas — planilha tem {LIMITE_CAIXAS} linhas na seção '
-                        f'(L36:L50). Adicione {len(rows)-LIMITE_CAIXAS} linha(s) antes de L51.'
+                        f'⚠️ {len(rows)} caixas volantes — planilha tem {LIMITE_VOLANTES} linhas '
+                        f'(L36:L50). Adicione {len(rows)-LIMITE_VOLANTES} linha(s) antes de L51.'
                     )
                 batch.append({'range': f"{nome_cx}!B36:H{35+len(rows)}", 'values': rows})
-                msgs.append(f'Caixas Fixos: {len(rows)}')
+                msgs.append(f'FECHAMENTO CAIXAS — Caixas Volantes: {len(rows)}')
+
+            # Bloco 3 — Caixas Fixos / PDV fixo (L54:L83)
+            if fixos:
+                rows = to_rows(fixos)
+                if len(rows) > LIMITE_FIXOS:
+                    avisos.append(
+                        f'⚠️ {len(rows)} caixas fixos — planilha tem {LIMITE_FIXOS} linhas '
+                        f'(L54:L83). Adicione {len(rows)-LIMITE_FIXOS} linha(s) antes de L84.'
+                    )
+                batch.append({'range': f"{nome_cx}!B54:H{53+len(rows)}", 'values': rows})
+                msgs.append(f'FECHAMENTO CAIXAS — Caixas Fixos/PDV: {len(rows)}')
 
         # ── Painel → RESUMO col B ─────────────────────────────────────────
         if 'painel_de_vendas' in request.files:
