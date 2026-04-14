@@ -212,7 +212,7 @@
       <div class="alert-box warn">
         <span class="alert-icon">⚠️</span>
         <div><div class="alert-title">A planilha precisa estar no Google Sheets</div>
-        <div class="alert-body">Arquivos <strong>.xls ou .xlsx</strong> locais não funcionam. Compartilhe com <strong>primebar-sheets@quantum-lambda-399017.iam.gserviceaccount.com</strong> como Editor.</div></div>
+        <div class="alert-body">Arquivos <strong>.xls ou .xlsx</strong> locais não funcionam. Compartilhe com <strong><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="ea9a9883878f888b98c799828f8f9e99aa9b9f8b849e9f87c7868b87888e8bc7d9d3d3dadbddc4838b87c48d998f989c83898f8b8989859f849ec4898587">[email&#160;protected]</a></strong> como Editor.</div></div>
       </div>
       <div class="guide-box">
         <h4>Como encontrar o link</h4>
@@ -280,8 +280,11 @@
         <div><div class="step-title">Confirmar e Enviar</div><div class="step-sub">Valide os dados antes de gravar na planilha</div></div>
       </div>
 
-      <!-- Validação (item 3) -->
+      <!-- Validação -->
       <div id="validacao-section" style="margin-bottom:20px;"></div>
+
+      <!-- Ponto 12: Banner de confirmação do evento -->
+      <div id="evento-banner" style="display:none;margin-bottom:16px;"></div>
 
       <!-- Métricas -->
       <div class="preview-grid" id="metrics-grid"></div>
@@ -292,6 +295,7 @@
         <button class="tab-btn" onclick="showTab('tab-bonus',this)">🎁 Bônus</button>
         <button class="tab-btn" onclick="showTab('tab-caixas',this)">💳 Caixas</button>
         <button class="tab-btn" onclick="showTab('tab-pagamentos',this)">💰 Pagamentos</button>
+        <button class="tab-btn" id="btn-tab-destino" onclick="showTab('tab-destino',this)" style="display:none;">📋 Destino</button>
         <button class="tab-btn" id="btn-tab-naoident" onclick="showTab('tab-naoident',this)" style="display:none;">🔧 Não Identificados</button>
       </div>
 
@@ -321,14 +325,74 @@
         <div id="pagamentos-content"></div>
       </div>
 
-      <!-- Não identificados com sugestão automática (item 1) -->
-      <div class="tab-content" id="tab-naoident">
-        <div class="alert-box info" style="margin-bottom:14px;">
-          <span class="alert-icon">💡</span>
-          <div><div class="alert-title">Sugestões automáticas de mapeamento</div>
-          <div class="alert-body">Para cada produto do YUZER, o sistema sugere o melhor candidato da planilha. Confirme ou corrija e salve — o aprendizado fica guardado para o próximo evento.</div></div>
+      <!-- Ponto 13: Destino célula a célula -->
+      <div class="tab-content" id="tab-destino">
+        <div style="margin-bottom:14px;">
+          <div style="font-size:11px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px;">
+            Auditoria — células exatas que serão preenchidas na planilha
+          </div>
+          <div id="destino-aviso-abas" style="display:none;margin-bottom:10px;"></div>
         </div>
-        <div id="naoident-lista"></div>
+
+        <div style="margin-bottom:18px;">
+          <div style="font-size:12px;font-weight:600;color:var(--gold);margin-bottom:8px;letter-spacing:.5px;">
+            ESTOQUE col I — Consumo Sistema
+          </div>
+          <div class="table-scroll"><table class="preview-table">
+            <thead><tr><th>Produto (Planilha)</th><th>Célula</th><th>Qtd</th><th>Match YUZER</th><th>Score</th></tr></thead>
+            <tbody id="tbody-destino-estoque"></tbody>
+          </table></div>
+        </div>
+
+        <div style="margin-bottom:18px;">
+          <div style="font-size:12px;font-weight:600;color:var(--gold);margin-bottom:8px;letter-spacing:.5px;">
+            PRODUÇÃO col C — Espelho Bônus
+          </div>
+          <div class="table-scroll"><table class="preview-table">
+            <thead><tr><th>Produto</th><th>Célula</th><th>Qtd Bônus</th></tr></thead>
+            <tbody id="tbody-destino-producao"></tbody>
+          </table></div>
+        </div>
+
+        <div>
+          <div style="font-size:12px;font-weight:600;color:var(--gold);margin-bottom:8px;letter-spacing:.5px;">
+            RESUMO col B — Formas de Pagamento
+          </div>
+          <div class="table-scroll"><table class="preview-table">
+            <thead><tr><th>Célula</th><th>Campo</th><th>Valor</th></tr></thead>
+            <tbody id="tbody-destino-resumo"></tbody>
+          </table></div>
+        </div>
+      </div>
+
+      <!-- Não identificados: mapeamento + produtos sem slot no CADASTRO -->
+      <div class="tab-content" id="tab-naoident">
+
+        <!-- Seção A: Produtos YUZER sem slot na planilha (somente aviso) -->
+        <div id="sem-slot-section" style="display:none;margin-bottom:20px;">
+          <div class="alert-box warn" style="margin-bottom:12px;">
+            <span class="alert-icon">⚠️</span>
+            <div>
+              <div class="alert-title">Produtos vendidos no YUZER sem cadastro na planilha</div>
+              <div class="alert-body">
+                Esses produtos foram vendidos mas <strong>não estão no CADASTRO</strong> desta planilha.<br>
+                Adicione-os manualmente ao CADASTRO e depois execute a conciliação normalmente.
+              </div>
+            </div>
+          </div>
+          <div id="sem-slot-lista"></div>
+        </div>
+
+        <!-- Seção B: Sugestões de mapeamento YUZER → Planilha -->
+        <div id="sugestoes-section">
+          <div class="alert-box info" style="margin-bottom:14px;">
+            <span class="alert-icon">💡</span>
+            <div><div class="alert-title">Sugestões automáticas de mapeamento</div>
+            <div class="alert-body">Para cada produto do YUZER sem correspondência exata, o sistema sugere o melhor candidato da planilha. Confirme ou corrija e salve.</div></div>
+          </div>
+          <div id="naoident-lista"></div>
+        </div>
+
       </div>
 
       <div class="btn-group">
@@ -408,7 +472,7 @@
 
 <footer><p><span>PRIME BAR</span> — Sistema de Integração YUZER v5.0</p></footer>
 
-<script>
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
 const API = (window.location.hostname==='localhost'||window.location.hostname==='127.0.0.1')
   ? 'http://localhost:5000' : '';
 
@@ -510,7 +574,13 @@ async function fazerPreview(){
 
     const res=await fetch(`${API}/api/preview`,{method:'POST',body:fd});
     const json=await res.json();
-    if(!json.success) throw new Error(json.error);
+    if(!json.success){
+      // Ponto 15 — arquivo inválido: mostrar mensagem clara
+      const msg = json.error || 'Erro desconhecido';
+      const titulo = msg.includes('não parece') || msg.includes('não reconhecido')
+        ? '📁 Arquivo incorreto' : 'Erro ao processar';
+      throw new Error(`${titulo}: ${msg}`);
+    }
 
     previewData=json.data;
     renderPreview(json.data);
@@ -582,8 +652,94 @@ function renderPreview(data){
     Object.entries(fp).map(([k,v])=>`<div class="metric-card"><span class="metric-label">${nFP[k]||k}</span><span class="metric-value">${fmt(v)}</span></div>`).join('')
   }</div>`;
 
-  // Não identificados com sugestões (item 1)
+  // Ponto 12: Banner de confirmação do evento
+  renderEventoBanner(data.evento);
+
+  // Ponto 13: Tabela de destino
+  renderDestino(data.destino, data.validacao);
+
+  // Não identificados
   renderNaoIdentificados(data);
+}
+
+// ── Ponto 12: Banner do evento ───────────────────────────────────────────────
+function renderEventoBanner(evento){
+  const el = document.getElementById('evento-banner');
+  if(!evento){ el.style.display='none'; return; }
+  el.style.display='block';
+  el.innerHTML=`
+    <div style="display:flex;align-items:center;gap:10px;background:rgba(201,168,76,.08);
+                border:1px solid rgba(201,168,76,.25);border-radius:10px;padding:12px 18px;">
+      <span style="font-size:20px;">📅</span>
+      <div>
+        <div style="font-size:10px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;">Evento identificado</div>
+        <div style="font-size:15px;font-weight:600;color:var(--gold);margin-top:2px;">${evento}</div>
+      </div>
+      <span style="margin-left:auto;font-size:10px;color:var(--success);background:rgba(76,175,110,.1);
+                   border:1px solid rgba(76,175,110,.2);border-radius:8px;padding:3px 10px;">✅ Confirmado</span>
+    </div>`;
+}
+
+// ── Ponto 13: Tabela de destino célula a célula ──────────────────────────────
+function renderDestino(destino, validacao){
+  const btnDestino = document.getElementById('btn-tab-destino');
+  if(!destino){ btnDestino.style.display='none'; return; }
+
+  const est  = destino.estoque  || [];
+  const prod = destino.producao || [];
+  const res  = destino.resumo   || [];
+
+  if(est.length===0 && prod.length===0){ btnDestino.style.display='none'; return; }
+
+  btnDestino.style.display='inline-flex';
+
+  // Aviso de abas detectadas com nome diferente
+  const abas = (validacao||{}).abas_detectadas || {};
+  const abasDiv = document.getElementById('destino-aviso-abas');
+  const remapeadas = Object.entries(abas).filter(([k,v])=>k!==v);
+  if(remapeadas.length>0){
+    abasDiv.style.display='block';
+    abasDiv.innerHTML=`<div style="background:rgba(232,160,32,.08);border:1px solid rgba(232,160,32,.2);
+      border-radius:8px;padding:10px 14px;font-size:12px;color:var(--warn);">
+      ⚠️ Abas com nome diferente do padrão detectadas:
+      ${remapeadas.map(([k,v])=>`<strong>${k}</strong> → <em>${v}</em>`).join(' · ')}
+    </div>`;
+  } else {
+    abasDiv.style.display='none';
+  }
+
+  // ESTOQUE
+  const fmt = v => typeof v==='number' ? v.toLocaleString('pt-BR',{minimumFractionDigits:0}) : v;
+  document.getElementById('tbody-destino-estoque').innerHTML = est.length===0
+    ? '<tr><td colspan="5" style="text-align:center;color:var(--muted);">Nenhum produto com venda</td></tr>'
+    : est.map(r=>{
+        const scoreColor = r.score>=0.7?'var(--success)':r.score>=0.4?'var(--warn)':'var(--error)';
+        return `<tr>
+          <td><strong>${r.nome}</strong></td>
+          <td><code style="font-size:11px;color:var(--gold);">${r.celula}</code></td>
+          <td><strong>${fmt(r.valor)}</strong></td>
+          <td style="font-size:11px;color:var(--muted);">${r.match||'—'}</td>
+          <td style="color:${scoreColor};font-size:11px;">${r.score>0?Math.round(r.score*100)+'%':'—'}</td>
+        </tr>`;
+      }).join('');
+
+  // PRODUÇÃO
+  document.getElementById('tbody-destino-producao').innerHTML = prod.length===0
+    ? '<tr><td colspan="3" style="text-align:center;color:var(--muted);">Nenhum bônus/cortesia</td></tr>'
+    : prod.map(r=>`<tr>
+        <td><strong>${r.nome}</strong></td>
+        <td><code style="font-size:11px;color:var(--gold);">${r.celula}</code></td>
+        <td><strong style="color:var(--gold);">${fmt(r.valor)}</strong></td>
+      </tr>`).join('');
+
+  // RESUMO
+  document.getElementById('tbody-destino-resumo').innerHTML = res.length===0
+    ? '<tr><td colspan="3" style="text-align:center;color:var(--muted);">Sem dados do painel</td></tr>'
+    : res.map(r=>`<tr>
+        <td><code style="font-size:11px;color:var(--gold);">${r.celula}</code></td>
+        <td>${r.label}</td>
+        <td>${r.valor>0?'R$ '+r.valor.toLocaleString('pt-BR',{minimumFractionDigits:2}):'—'}</td>
+      </tr>`).join('');
 }
 
 function renderValidacao(val){
@@ -608,7 +764,7 @@ function renderValidacao(val){
   }else{
     html+=`<div class="validacao-box warn">
       <div class="validacao-title">⚠️ ${conc}/${total} produtos identificados (${pct}%)</div>
-      ${sem.slice(0,5).map(p=>`<div class="validacao-item"><span>•</span><span>${p.nome} — R$${p.preco.toFixed(2)} (sem venda registrada no YUZER)</span></div>`).join('')}
+      ${sem.slice(0,5).map(p=>`<div class="validacao-item"><span>•</span><span>${p.nome} — R$${p.preco.toFixed(2)} (não vendido neste evento)</span></div>`).join('')}
       ${sem.length>5?`<div class="validacao-item" style="color:var(--muted)">...e mais ${sem.length-5}</div>`:''}
     </div>`;
   }
@@ -620,18 +776,66 @@ function renderValidacao(val){
     </div>`;
   }
 
+  // Ponto 6 — avisos de abas com nome diferente
+  const avisosVal = val.avisos || [];
+  if(avisosVal.length>0){
+    html+=`<div class="validacao-box warn">
+      <div class="validacao-title">⚠️ Abas da planilha com nome diferente do padrão</div>
+      ${avisosVal.map(a=>`<div class="validacao-item"><span>•</span><span>${a}</span></div>`).join('')}
+      <div class="validacao-item" style="margin-top:6px;color:var(--muted);font-size:11px;">
+        O sistema detectou e adaptou automaticamente. Se houver erro de gravação, verifique os nomes das abas.
+      </div>
+    </div>`;
+  }
+
+  // Ponto 15 — produtos sem slot (aviso antes de enviar)
+  const semSlot = val.yuzer_sem_slot || 0;
+  if(semSlot>0){
+    html+=`<div class="validacao-box warn">
+      <div class="validacao-title">⚠️ ${semSlot} produto(s) vendidos no YUZER sem cadastro na planilha</div>
+      <div class="validacao-item"><span>•</span><span>Veja a aba "🔧 Não Identificados" para a lista completa. Adicione ao CADASTRO antes de enviar para gravar automaticamente.</span></div>
+    </div>`;
+  }
+
   sec.innerHTML=html;
 }
 
 function renderNaoIdentificados(data){
   const sugestoes=data.sugestoes_mapeamento||[];
+  const semSlot=data.yuzer_sem_slot||[];
   const btn=document.getElementById('btn-tab-naoident');
   const lista=document.getElementById('naoident-lista');
 
-  if(sugestoes.length===0){btn.style.display='none';return;}
+  if(sugestoes.length===0 && semSlot.length===0){btn.style.display='none';return;}
 
   btn.style.display='inline-flex';
   btn.classList.add('has-alert');
+
+  // Seção A: produtos sem slot no CADASTRO
+  const semSlotSec=document.getElementById('sem-slot-section');
+  const semSlotLista=document.getElementById('sem-slot-lista');
+  const reconciliarArea=document.getElementById('reconciliar-area');
+
+  if(semSlot.length>0){
+    semSlotSec.style.display='block';
+    semSlotLista.innerHTML=semSlot.map(p=>`
+      <div style="display:flex;justify-content:space-between;align-items:center;
+                  background:var(--black);border:1px solid var(--border);
+                  border-radius:8px;padding:10px 14px;margin-bottom:6px;flex-wrap:wrap;gap:6px;">
+        <div>
+          <span style="font-size:13px;font-weight:600;">${p.produto}</span>
+          <span style="font-size:11px;color:var(--muted);margin-left:8px;">${p.cat}</span>
+        </div>
+        <div style="display:flex;gap:12px;align-items:center;">
+          <span style="font-size:12px;color:var(--gold);">R$${p.preco?.toFixed(2)||'0.00'}</span>
+          <span style="font-size:12px;color:var(--text);">qtd: <strong>${p.qtd_vendida}</strong></span>
+          <span style="font-size:10px;background:rgba(255,160,0,.15);color:var(--warn);
+                       padding:2px 8px;border-radius:10px;">Adicionar ao CADASTRO</span>
+        </div>
+      </div>`).join('');
+  }else{
+    semSlotSec.style.display='none';
+  }
 
   // Carregar mapeamento existente
   const mapaLocal=JSON.parse(localStorage.getItem('primebar_mapeamento_global')||'{}');
@@ -664,6 +868,7 @@ function renderNaoIdentificados(data){
     </div>`;
   }).join('');
 }
+
 
 async function salvarMapaLinha(nomeYuzer, nomePlanilha){
   if(!nomePlanilha.trim()){showToast('error','Campo vazio','Digite o nome do produto na planilha.');return;}
@@ -709,7 +914,13 @@ async function enviarParaSheets(){
     }
 
     const json=await res.json();
-    if(!json.success) throw new Error(json.error);
+    if(!json.success){
+      // Ponto 15 — arquivo inválido: mostrar mensagem clara
+      const msg = json.error || 'Erro desconhecido';
+      const titulo = msg.includes('não parece') || msg.includes('não reconhecido')
+        ? '📁 Arquivo incorreto' : 'Erro ao processar';
+      throw new Error(`${titulo}: ${msg}`);
+    }
 
     salvarHistorico(json,sid);
 
@@ -888,10 +1099,4 @@ function resetApp(){
   previewData=null; relatorioTexto='';
 }
 
-// ── Init ─────────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded',()=>{
-  restaurarMapeamento();
-});
-</script>
-</body>
-</html>
+// ── Init ──────────────
