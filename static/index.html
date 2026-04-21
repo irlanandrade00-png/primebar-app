@@ -212,7 +212,7 @@
       <div class="alert-box warn">
         <span class="alert-icon">⚠️</span>
         <div><div class="alert-title">A planilha precisa estar no Google Sheets</div>
-        <div class="alert-body">Arquivos <strong>.xls ou .xlsx</strong> locais não funcionam. Compartilhe com <strong><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="ea9a9883878f888b98c799828f8f9e99aa9b9f8b849e9f87c7868b87888e8bc7d9d3d3dadbddc4838b87c48d998f989c83898f8b8989859f849ec4898587">[email&#160;protected]</a></strong> como Editor.</div></div>
+        <div class="alert-body">Arquivos <strong>.xls ou .xlsx</strong> locais não funcionam. Compartilhe com <strong>primebar-sheets@quantum-lambda-399017.iam.gserviceaccount.com</strong> como Editor.</div></div>
       </div>
       <div class="guide-box">
         <h4>Como encontrar o link</h4>
@@ -472,7 +472,7 @@
 
 <footer><p><span>PRIME BAR</span> — Sistema de Integração YUZER v5.0</p></footer>
 
-<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
+<script>
 const API = (window.location.hostname==='localhost'||window.location.hostname==='127.0.0.1')
   ? 'http://localhost:5000' : '';
 
@@ -1098,5 +1098,10 @@ function resetApp(){
   setProgress(33);
   previewData=null; relatorioTexto='';
 }
-
-// ── Init ──────────────
+// ── Init ─────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded',()=>{
+  restaurarMapeamento();
+});
+</script>
+</body>
+</html>
