@@ -807,15 +807,25 @@ def _carregar_mapeamento_persistido():
 
 
 _mapeamento_global = {
-    'DRINK Tropical Gin':       'TROPICAL GIN ( GIN + RODELA DE LARANJA E RED BUUL TROPICAL )',
-    'DRINK Melancita':          'MELANCITA ( GIN + RODELA DE LIMÃO E RED BUUL MELANCIA )',
-    'DRINK Moscow Mule':        'MOSCOW MULLE ( VODKA + XAROPE DE GENGIBRE + SUMO DE LIMÃO E ESPUMA CITRICA )',
-    'DRINK Pink Limonade':      'PINK LEMONADE ( GIN +  SUCO DE  LIMÃO + GROSELHA E RODELA DE LIMÃO SICILIANO)',
-    'DRINK Gija':               'GIJA ( GIN + TONICA + XAROPE DE GENGIBRE + CANELA E RODELA DE LIMÃO SICILIANO )',
-    'DRINK Gin Tônica':         'GIN TONICA ( GIN + TONICA E RODELA DE LIMÃO )',
-    'DRINK Vodka + Red Bull':   'VODKA E RED BUUL (VODKA + RED BUUL + ESCOLHA SEU SABOR )',
-    'Old Parr+3 Red Bull':      'OLDPAR 12 ANOS 1L  + 3 REDBULL 250ML',
-    'Old Parr+5 Águas de Coco': 'OLDPARR 12 ANOS 1L + 5 AGUA DE COCO',
+    # ── Drinks padrão Prime Bar ──────────────────────────────────────────
+    'DRINK Tropical Gin':        'TROPICAL GIN ( GIN + RODELA DE LARANJA E RED BUUL TROPICAL )',
+    'DRINK Melancita':           'MELANCITA ( GIN + RODELA DE LIMÃO E RED BUUL MELANCIA )',
+    'DRINK Moscow Mule':         'MOSCOW MULLE ( VODKA + XAROPE DE GENGIBRE + SUMO DE LIMÃO E ESPUMA CITRICA )',
+    'DRINK Pink Limonade':       'PINK LEMONADE ( GIN +  SUCO DE  LIMÃO + GROSELHA E RODELA DE LIMÃO SICILIANO)',
+    'DRINK Gija':                'GIJA ( GIN + TONICA + XAROPE DE GENGIBRE + CANELA E RODELA DE LIMÃO SICILIANO )',
+    'DRINK Gin Tônica':          'GIN TONICA ( GIN + TONICA E RODELA DE LIMÃO )',
+
+    # ── Fix 1a: nomes corrigidos para bater com planilha real ────────────
+    # (antes tinham typos: RED BUUL, REDBULL sem espaço)
+    'DRINK Vodka + Red Bull':    'VODKA E REDBULL ( VODKA + REDBULL',
+    'Old Parr+3 Red Bull':       'OLDPAR 12 ANOS 1L + 3 RED BULL 250ML',
+    'Old Parr+5 Águas de Coco':  'OLDPARR 12 ANOS 1L + 5 AGUA DE COCO',
+    'DRINK Gin + Red Bull':      'GIN COM REDBULL  (GIN + REDBULL',
+
+    # ── Fix 1b: drinks Prime (YUZER abreviado → planilha nome completo) ──
+    'DRINK Prime Tonic':         'PRIME TONIC ( GIN  – AGUA TONICA - LIMAO SICILIANO – ALLECRIM)',
+    'DRINK Prime Mule':          'PRIME MULE ( VODKA - LIMAO - XAROPE GENGIBRE - AGUA COM GÁS - ESPUMA GENGIBRE)',
+    'DRINK Prime Penicillin':    'PRIME PENICILLIN ( WHISK 12 ANOS - SUCO LIMAO SICILIANO, XAROPE GENGIBRE - XAROPE DE AÇÚCAR)',
 }
 _mapeamento_global.update(_carregar_mapeamento_persistido())
 _mapeamento_store = {}
@@ -1075,7 +1085,9 @@ def preview():
                 except Exception:
                     pass  # destino é opcional no preview
 
-                # Produtos YUZER sem slot
+                # Fix 3: todos_matched contém nomes da planilha, mas vendas tem
+                # nomes originais do YUZER. Verificar nome original E nome mapeado
+                # para não gerar falsos positivos em produtos que já foram matchados.
                 todos_matched = set()
                 for ps in agrupado.values():
                     for p in ps:
@@ -1085,10 +1097,14 @@ def preview():
                 yuzer_sem_slot = []
                 vistos_ss      = set()
                 for p in (vendas + bonus):
-                    if p['produto'] not in todos_matched and p['produto'] not in vistos_ss:
-                        vistos_ss.add(p['produto'])
+                    nome_original = p['produto']
+                    nome_mapeado  = mapa_atual.get(nome_original, nome_original)
+                    ja_match = (nome_original in todos_matched or
+                                nome_mapeado  in todos_matched)
+                    if not ja_match and nome_original not in vistos_ss:
+                        vistos_ss.add(nome_original)
                         yuzer_sem_slot.append({
-                            'produto':     p['produto'],
+                            'produto':     nome_original,
                             'preco':       p['preco'],
                             'qtd_vendida': p['qtd_vendida'],
                             'cat':         p['cat'],
@@ -1241,13 +1257,16 @@ def enviar():
                 msgs.append(f'ℹ️ {nao_vend} não vendidos neste evento: {"; ".join(nomes_nv[:5])}')
 
             # Produtos YUZER sem slot
+            # Fix 3: verificar nome original E mapeado para evitar falsos positivos
             todos_matched = set()
             for ps in agrupado.values():
                 for p in ps:
                     if p.get('match_venda'): todos_matched.add(p['match_venda'])
                     if p.get('match_bonus'):  todos_matched.add(p['match_bonus'])
             sem_slot = list(dict.fromkeys(
-                p['produto'] for p in (vendas + bonus) if p['produto'] not in todos_matched
+                p['produto'] for p in (vendas + bonus)
+                if p['produto'] not in todos_matched
+                and mapa_atual.get(p['produto'], p['produto']) not in todos_matched
             ))
             if sem_slot:
                 avisos.append(
