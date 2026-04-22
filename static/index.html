@@ -573,9 +573,14 @@ async function fazerPreview(){
     if(bonus) fd.append('produtos_bonus',bonus);
 
     const res=await fetch(`${API}/api/preview`,{method:'POST',body:fd});
-    const json=await res.json();
+    const text=await res.text();
+    if(!text || !text.trim()){
+      throw new Error('Servidor não respondeu. Pode ser timeout — tente novamente. Se persistir, verifique o Render.');
+    }
+    let json;
+    try{ json=JSON.parse(text); }
+    catch(e){ throw new Error('Resposta inválida do servidor: '+text.substring(0,120)); }
     if(!json.success){
-      // Ponto 15 — arquivo inválido: mostrar mensagem clara
       const msg = json.error || 'Erro desconhecido';
       const titulo = msg.includes('não parece') || msg.includes('não reconhecido')
         ? '📁 Arquivo incorreto' : 'Erro ao processar';
@@ -829,8 +834,9 @@ function renderNaoIdentificados(data){
         <div style="display:flex;gap:12px;align-items:center;">
           <span style="font-size:12px;color:var(--gold);">R$${p.preco?.toFixed(2)||'0.00'}</span>
           <span style="font-size:12px;color:var(--text);">qtd: <strong>${p.qtd_vendida}</strong></span>
-          <span style="font-size:10px;background:rgba(255,160,0,.15);color:var(--warn);
-                       padding:2px 8px;border-radius:10px;">Adicionar ao CADASTRO</span>
+          <span style="font-size:10px;background:rgba(136,136,136,.12);color:var(--muted);
+                       padding:2px 8px;border-radius:4px;letter-spacing:.3px;">
+                       ＋ Adicionar ao CADASTRO manualmente</span>
         </div>
       </div>`).join('');
   }else{
@@ -858,8 +864,9 @@ function renderNaoIdentificados(data){
         <input type="text" id="ni_${idx}" class="mapa-input" placeholder="Nome na planilha (CADASTRO)" value="${valorAtual}"
           list="alt_${idx}">
         <datalist id="alt_${idx}">${altOptions}</datalist>
-        <button onclick="salvarMapaLinha('${s.yuzer}',document.getElementById('ni_${idx}').value)"
-          style="background:var(--gold);color:var(--black);border:none;border-radius:6px;padding:8px 12px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;">
+        <button id="btn_salvar_${idx}"
+          onclick="salvarMapaLinha('${s.yuzer}',document.getElementById('ni_${idx}').value,'btn_salvar_${idx}')"
+          style="background:var(--gold);color:var(--black);border:none;border-radius:6px;padding:8px 12px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;min-width:80px;">
           💾 Salvar
         </button>
         <button onclick="this.closest('div').parentElement.parentElement.remove()"
@@ -870,19 +877,37 @@ function renderNaoIdentificados(data){
 }
 
 
-async function salvarMapaLinha(nomeYuzer, nomePlanilha){
+async function salvarMapaLinha(nomeYuzer, nomePlanilha, btnId){
   if(!nomePlanilha.trim()){showToast('error','Campo vazio','Digite o nome do produto na planilha.');return;}
+
+  // Feedback imediato no botão
+  const btn = btnId ? document.getElementById(btnId) : null;
+  if(btn){ btn.disabled=true; btn.textContent='...'; btn.style.background='var(--border)'; }
+
   const mapa=JSON.parse(localStorage.getItem('primebar_mapeamento_global')||'{}');
   mapa[nomeYuzer]=nomePlanilha.trim();
   localStorage.setItem('primebar_mapeamento_global',JSON.stringify(mapa));
+
   try{
     const sid=document.getElementById('spreadsheet-id').value.trim();
     await fetch(`${API}/api/mapeamento`,{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({spreadsheet_id:sid,mapeamento:{[nomeYuzer]:nomePlanilha.trim()},aprender:true})
     });
+    if(btn){
+      btn.textContent='✅ Salvo';
+      btn.style.background='var(--success)';
+      btn.style.color='var(--black)';
+    }
     showToast('success','Mapeamento salvo',`"${nomeYuzer}" → "${nomePlanilha.trim()}"`);
-  }catch(e){showToast('warn','Salvo localmente','Não foi possível salvar no servidor.');}
+  }catch(e){
+    if(btn){
+      btn.textContent='✅ Salvo*';
+      btn.style.background='var(--warn)';
+      btn.title='Salvo localmente — servidor indisponível';
+    }
+    showToast('warn','Salvo localmente','Não foi possível salvar no servidor.');
+  }
 }
 
 // ── Enviar ───────────────────────────────────────────────────────────────────
